@@ -1,0 +1,59 @@
+name: cd
+# Variable del repositorio: PUBLIC_HOST (IP o dominio público, sin https://)
+# Al hacer commit en main: construye la imagen EN EL PC (runner propio, usa el caché de Docker), la sube a GHCR
+# y reinicia el servicio en su servidor por SSH. Requiere el runner encendido (Escritorio\iniciar-runners.bat) y Docker Desktop abierto.
+# Secretos del repositorio: SSH_HOST, SSH_USER, SSH_KEY
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+  packages: write
+concurrency:
+  group: cd
+  cancel-in-progress: true
+jobs:
+  desplegar:
+    runs-on: [self-hosted, pc-julio]
+    defaults:
+      run:
+        shell: C:/gitbash/bin/bash.exe --noprofile --norc -e -o pipefail {0}
+    env:
+      SSH_KEY: ${{ secrets.SSH_KEY }}
+      SSH_HOST: ${{ secrets.SSH_HOST }}
+      SSH_USER: ${{ secrets.SSH_USER }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login en GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Construir y subir las 6 imágenes (en paralelo)
+        env:
+          H: https://${{ vars.PUBLIC_HOST }}
+        run: |
+          OWNER=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr 'A-Z' 'a-z')
+          construir() {  # imagen contexto [build-args...]
+            img=$1; ctx=$2; shift 2
+            docker build -t ghcr.io/$OWNER/$img:latest --label org.opencontainers.image.source=https://github.com/${{ github.repository }} "$@" $ctx \
+              && docker push ghcr.io/$OWNER/$img:latest
+          }
+          construir api-gateway gateway/api-gateway &
+          construir graphql-gateway gateway/graphql-gateway &
+          construir backoffice-gestion frontend/backoffice-gestion &
+          construir shell frontend/shell --build-arg VITE_KEYCLOAK_URL=$H:8085 --build-arg VITE_API_URL=$H:8080 \
+            --build-arg VITE_REMOTE_PORTAL=$H:3002/assets/remoteEntry.js --build-arg "VITE_BACKOFFICE_URL=$H:3001?embedded=1" --build-arg "VITE_BI_URL=$H:3003?embedded=1" &
+          construir portal-estudiante frontend/portal-estudiante --build-arg VITE_KEYCLOAK_URL=$H:8085 --build-arg VITE_API_URL=$H:8080 &
+          construir inteligencia-negocio frontend/inteligencia-negocio --build-arg NEXT_PUBLIC_KEYCLOAK_URL=$H:8085 --build-arg NEXT_PUBLIC_API_URL=$H:8080 &
+          fallos=0; for p in $(jobs -p); do wait $p || fallos=1; done; exit $fallos
+
+      - name: Desplegar por SSH
+        run: |
+          OWNER=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr 'A-Z' 'a-z')
+          printf '%s\n' "$SSH_KEY" > key && chmod 600 key
+          SSH="ssh -i key -o StrictHostKeyChecking=no -o ConnectTimeout=20 $SSH_USER@$SSH_HOST"
+          echo "${{ secrets.GITHUB_TOKEN }}" | $SSH "docker login ghcr.io -u ${{ github.actor }} --password-stdin"
+          $SSH "cd ~/comedor && docker compose --env-file .env --env-file .env.secrets --env-file .env.ec2 -f docker-compose.yml -f docker-compose.ec2.yml pull api-gateway graphql-gateway shell backoffice-gestion portal-estudiante inteligencia-negocio && docker compose --env-file .env --env-file .env.secrets --env-file .env.ec2 -f docker-compose.yml -f docker-compose.ec2.yml up -d --no-deps api-gateway graphql-gateway shell backoffice-gestion portal-estudiante inteligencia-negocio && docker image prune -f >/dev/null"
+          rm -f key
