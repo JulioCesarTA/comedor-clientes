@@ -1,0 +1,20 @@
+name: ci
+on:
+  push:
+  pull_request:
+jobs:
+  imagenes:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        contexto:
+          - gateway/api-gateway
+          - gateway/graphql-gateway
+          - frontend/shell
+          - frontend/backoffice-gestion
+          - frontend/portal-estudiante
+          - frontend/inteligencia-negocio
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t clientes-test ${{ matrix.contexto }}

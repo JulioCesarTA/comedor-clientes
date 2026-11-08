@@ -1,0 +1,3 @@
+/* usamos Tailwind CDN desde el layout.tsx */
+*{box-sizing:border-box}
+body{margin:0}

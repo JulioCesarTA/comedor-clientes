@@ -1,0 +1,11 @@
+{
+  "name": "Comedor UAGRM — Portal Estudiante",
+  "short_name": "Comedor",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#2563eb",
+  "icons": [
+    { "src": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48dGV4dCB5PSI1MCUiIHg9IjUwJSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSI3MCI+8J+NvDwvdGV4dD48L3N2Zz4=", "sizes": "192x192", "type": "image/svg+xml" }
+  ]
+}
