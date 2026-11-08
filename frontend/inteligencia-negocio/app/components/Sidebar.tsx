@@ -8,6 +8,7 @@ const sections = [
     { href: '/kpi', label: 'KPI' },
     { href: '/segmentacion', label: 'Agrupación de platos' },
     { href: '/cnn', label: 'Desperdicio por foto' },
+    { href: '/reportes', label: 'Reportes con IA (texto y voz)' },
   ]},
 ];
 
