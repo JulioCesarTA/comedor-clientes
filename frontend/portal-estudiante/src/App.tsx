@@ -81,7 +81,15 @@ export default function App() {
     if (user) try { localStorage.setItem(STORAGE_KEY(user), JSON.stringify(historial)); } catch {}
   }, [user, historial]);
 
-  useEffect(() => { axios.get(`${API}/menus/semana/${turno}`).then(r => setMenus(r.data)).catch(() => {}); }, [turno]);
+  // Semana actual y la siguiente, solo desde hoy en adelante (no tiene sentido reservar días pasados)
+  useEffect(() => {
+    const f = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const hoy = new Date();
+    const lunes = new Date(hoy); lunes.setDate(hoy.getDate() - ((hoy.getDay() + 6) % 7));
+    const proxima = new Date(lunes); proxima.setDate(lunes.getDate() + 7);
+    Promise.all([lunes, proxima].map(d => axios.get(`${API}/menus/semana/${turno}`, { params: { inicio: f(d) } }).then(r => r.data as any[]).catch(() => [] as any[])))
+      .then(([a, b]) => setMenus([...a, ...b].filter(m => m.fecha >= f(hoy))));
+  }, [turno]);
   useEffect(() => { if (user) axios.get(`${API}/estudiantes/${user}/beca`).then(r => setBeca(r.data)).catch(() => {}); }, [user]);
 
   // Un solo bloque por día: se fusionan los menús repetidos y se ordena por fecha.
