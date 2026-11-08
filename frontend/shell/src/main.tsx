@@ -60,7 +60,7 @@ const MODULOS: Modulo[] = [
   },
   {
     key: 'backoffice', base: '/backoffice', label: 'Gestión operativa',
-    roles: ['admin', 'cocinero', 'caja'],
+    roles: ['admin', 'cocinero', 'caja', 'nutri'],
   },
   {
     key: 'bi', base: '/bi', label: 'Analítica e inteligencia',
@@ -72,7 +72,7 @@ function rolesParaAcceso(roles: string[]): string[] {
   const low = roles.map(r => r.toLowerCase());
   const out: string[] = [];
   if (low.some(r => r === 'administrador' || r.includes('admin'))) out.push('admin');
-  if (low.some(r => r.includes('cocinero'))) out.push('cocinero');
+  if (low.some(r => r.includes('cocin'))) out.push('cocinero');
   if (low.some(r => r.includes('caja'))) out.push('caja');
   if (low.some(r => r.includes('nutri'))) out.push('nutri');
   if (low.some(r => r === 'estudiante' || r.includes('estudiante'))) out.push('estudiante');

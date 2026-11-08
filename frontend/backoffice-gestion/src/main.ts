@@ -1297,11 +1297,12 @@ class AppComponent {
   esAdmin = this.rawRoles.some(r => r === 'administrador' || r.toLowerCase().includes('admin'));
   esCocinero = this.rawRoles.some(r => r.toLowerCase().includes('cocinero') || r === 'cocina_almacen');
   esCaja = this.rawRoles.some(r => r.toLowerCase().includes('caja'));
-  rolLabel = this.esAdmin ? 'Administrador' : this.esCocinero ? 'Cocinero' : this.esCaja ? 'Caja' : (this.rawRoles[0] || 'Usuario');
-  verMenus = this.esAdmin || this.esCocinero;
+  esNutri = this.rawRoles.some(r => r.toLowerCase().includes('nutricionista'));
+  rolLabel = this.esAdmin ? 'Administrador' : this.esCocinero ? 'Cocinero' : this.esNutri ? 'Nutricionista' : this.esCaja ? 'Caja' : (this.rawRoles[0] || 'Usuario');
+  verMenus = this.esAdmin || this.esCocinero || this.esNutri;
   verCaja = this.esAdmin || this.esCaja;
   verAdminEstudiantes = this.esAdmin;
-  verAdminOperacion = this.esAdmin || this.esCocinero;
+  verAdminOperacion = this.esAdmin || this.esCocinero || this.esNutri;
   verAgentes = this.esAdmin;
   redirect() { if (window.location.pathname !== '/login') window.location.href = '/login'; return ''; }
   logout() { sessionStorage.clear(); window.location.href = '/login'; }
