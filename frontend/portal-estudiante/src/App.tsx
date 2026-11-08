@@ -108,24 +108,16 @@ export default function App() {
       });
   }, [busqueda, menus]);
 
-  const reservaDelDia = (fecha: string) =>
-    historial.find(h => h.fecha === fecha && h.status !== 'CANCELADA');
+  // Se puede reservar más de una ración por día: aquí solo se listan las que ya tiene.
+  const reservasDelDia = (fecha: string) =>
+    historial.filter(h => h.fecha === fecha && h.status !== 'CANCELADA');
 
   const notif = (msg: string, kind: 'ok' | 'err') => { setToast({ msg, kind }); setTimeout(() => setToast(null), 4000); };
 
   const reservar = async (menuId: string, platoId: string, fecha: string, t: string) => {
-    const previa = reservaDelDia(fecha);
-    if (previa) {
-      if (previa.status === 'PENDIENTE_PAGO' && previa.stripeUrl) {
-        setReserva({ reservaId: previa.reservaId, stripe: { paymentUrl: previa.stripeUrl, qrDataUri: previa.qrDataUri, gatewayRef: previa.stripeRef } });
-      } else {
-        notif('Ya tenés una reserva para ese día', 'err');
-      }
-      return;
-    }
     setLoading(platoId);
     try {
-      const idem = `portal-${user}-${fecha}-${platoId}`;
+      const idem = `portal-${user}-${fecha}-${platoId}-${Date.now()}`;  // una clave por intento: permite varias reservas del mismo plato
       const metodo = beca?.cubreHoy ? 'beca' : 'qr_bancario';
       const r = await axios.post(`${API}/sagas/reservar-y-pagar`, {
         estudiante_id: user, menu_id: menuId, plato_id: platoId, fecha, turno: t, metodo_pago: metodo, monto: 10, idempotency_key: idem,
@@ -246,24 +238,27 @@ export default function App() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {dias.length === 0 && <div className="col-span-full text-center py-10 text-slate-500">Sin menús publicados.</div>}
               {dias.map(d => {
-                const previa = reservaDelDia(d.fecha);
+                const delDia = reservasDelDia(d.fecha);
                 return (
                   <div key={d.fecha} className="bg-slate-800/50 border border-slate-700 rounded-xl p-5">
                     <div className="flex justify-between items-center mb-1">
                       <b className="text-white">{d.fecha}</b>
                       <span className="px-2 py-0.5 bg-slate-700 text-xs text-slate-300 rounded">{d.turno}</span>
                     </div>
-                    {previa ? (
+                    {delDia.length > 0 ? (
                       <div className="mb-2 text-xs rounded-lg px-3 py-2 bg-emerald-500/10 border border-emerald-500/40 text-emerald-300">
-                        {previa.status === 'PAGADA' ? 'Reservaste' : 'Reserva pendiente de pago:'} <b>{previa.plato}</b>
+                        Tus reservas de este día ({delDia.length}):{' '}
+                        {delDia.map((r, i) => (
+                          <span key={r.reservaId || i}>{i > 0 ? ', ' : ''}<b>{r.plato}</b>{r.status === 'PAGADA' ? '' : ' (pago pendiente)'}</span>
+                        ))}
                       </div>
                     ) : (
-                      <div className="mb-2 text-xs text-slate-500">Elegí un plato. Se permite una reserva por día.</div>
+                      <div className="mb-2 text-xs text-slate-500">Elegí un plato. Puedes reservar más de una ración por día.</div>
                     )}
                     {d.platos.map(p => {
                       const pct = (p.disponibles / p.cupo) * 100;
-                      const esLaReservada = previa?.plato === p.id;
-                      const bloqueado = !!previa && !esLaReservada;
+                      const veces = delDia.filter(r => r.plato === p.id).length;
+                      const pendiente = delDia.find(r => r.plato === p.id && r.status === 'PENDIENTE_PAGO' && r.stripeUrl);
                       return (
                         <div key={p.id} className="border-t border-slate-700 pt-3 mt-3">
                           <div className="flex justify-between items-center mb-2">
@@ -272,14 +267,15 @@ export default function App() {
                               <div className="text-xs text-slate-400">{p.disponibles}/{p.cupo} disponibles</div>
                             </div>
                             <button onClick={() => reservar(p.menuId, p.id, d.fecha, d.turno)}
-                              disabled={!p.disponibles || loading === p.id || bloqueado || (esLaReservada && previa?.status === 'PAGADA')}
+                              disabled={!p.disponibles || loading === p.id}
                               className={"px-4 py-1.5 rounded-lg text-sm font-medium " +
-                                (bloqueado || !p.disponibles || (esLaReservada && previa?.status === 'PAGADA')
-                                  ? "bg-slate-700 text-slate-500" : "bg-gradient-to-r from-orange-500 to-amber-600 text-white")}>
-                              {loading === p.id ? '…'
-                                : esLaReservada ? (previa?.status === 'PAGADA' ? 'Reservado' : 'Continuar pago')
-                                : !p.disponibles ? 'Agotado' : 'Reservar'}
+                                (!p.disponibles ? "bg-slate-700 text-slate-500" : "bg-gradient-to-r from-orange-500 to-amber-600 text-white")}>
+                              {loading === p.id ? '…' : !p.disponibles ? 'Agotado' : veces > 0 ? 'Reservar otro' : 'Reservar'}
                             </button>
+                            {pendiente && (
+                              <button onClick={() => setReserva({ reservaId: pendiente.reservaId, stripe: { paymentUrl: pendiente.stripeUrl, qrDataUri: pendiente.qrDataUri, gatewayRef: pendiente.stripeRef } })}
+                                className="ml-2 px-3 py-1.5 rounded-lg text-sm font-medium bg-slate-700 text-slate-200">Continuar pago</button>
+                            )}
                           </div>
                           <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden">
                             <div className="h-full bg-gradient-to-r from-orange-500 to-amber-600" style={{ width: pct + '%' }} />

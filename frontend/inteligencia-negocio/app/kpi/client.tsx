@@ -3,7 +3,8 @@ import {
   Bar, BarChart, CartesianGrid, Cell, ComposedChart, Legend, Line, Pie, PieChart, PolarAngleAxis,
   RadialBar, RadialBarChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
-import { hhmmss, useVivo } from '../lib/vivo';
+import { useVivo } from '../lib/vivo';
+import { BarraVivo } from '../components/BarraVivo';
 
 const tip = { background: '#1e293b', border: '1px solid #334155', borderRadius: 8, fontSize: 12 };
 const eje = { fill: '#94a3b8', fontSize: 11 };
@@ -202,12 +203,13 @@ function Tarjeta({ k }: { k: any }) {
 }
 
 export function KpisVivo() {
-  const { data: d, error, hora } = useVivo<any>('/ml/kpis', 15000);
+  const { data: d, error, hora, sinConexion, recargar } = useVivo<any>('/ml/kpis', 15000);
   if (!d) return <div className="px-8 py-10 text-slate-400">{error ? `No se pudo contactar al servidor (${error}). Reintentando…` : 'Calculando indicadores con los datos reales…'}</div>;
   return (
     <div className="px-8 pb-8 space-y-6">
       <div className="flex flex-wrap items-center gap-3 text-xs">
-        <span className="px-2.5 py-1 rounded border bg-emerald-500/10 border-emerald-500/40 text-emerald-400 font-medium">En vivo · actualizado {hhmmss(hora)}</span>
+        <BarraVivo hora={hora} sinConexion={sinConexion} recargar={recargar} registros={d.registros?.total} minimo={d.registros?.minimo ? d.registros.minimo * 3 : null} />
+        {d.registros && <span className="text-slate-500">{d.registros.menus.toLocaleString('es-BO')} menús · {d.registros.reservas.toLocaleString('es-BO')} reservas · {d.registros.pagos.toLocaleString('es-BO')} pagos (mín. {d.registros.minimo.toLocaleString('es-BO')} de cada uno)</span>}
         <span className="text-slate-500">Se recalculan solos con reservas, pagos, becas, menús, insumos y fotos de bandejas.</span>
       </div>
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">

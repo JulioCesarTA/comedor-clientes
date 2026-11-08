@@ -2,21 +2,22 @@
 import { useState } from 'react';
 import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Card, KPI } from '../components/Charts';
-import { API, fechaLocal, hhmmss, useVivo } from '../lib/vivo';
+import { API, fechaLocal, useVivo } from '../lib/vivo';
+import { BarraVivo } from '../components/BarraVivo';
 
 const tip = { background: '#1e293b', border: '1px solid #334155', borderRadius: 8, fontSize: 12 };
 const TURNO: Record<string, string> = { DESAYUNO: 'Desayuno', ALMUERZO: 'Almuerzo', CENA: 'Cena' };
 const corto = (id: string) => id.replace('plato-', '');
 
 export function PrediccionVivo() {
-  const { data: d, error, hora } = useVivo<any>('/ml/regresion');
+  const { data: d, error, hora, sinConexion, recargar } = useVivo<any>('/ml/regresion');
   if (!d) return <div className="px-8 py-10 text-slate-400">{error ? `No se pudo contactar al servidor (${error}). Reintentando…` : 'Entrenando con los datos reales…'}</div>;
   const m = d.metricas;
 
   return (
     <div className="px-8 pb-8 space-y-6">
       <div className="flex flex-wrap items-center gap-3 text-xs">
-        <span className="px-2.5 py-1 rounded border bg-emerald-500/10 border-emerald-500/40 text-emerald-400 font-medium">En vivo · actualizado {hhmmss(hora)}</span>
+        <BarraVivo hora={hora} sinConexion={sinConexion} recargar={recargar} registros={d.muestras} minimo={d.minimo} />
         <span className={'px-2.5 py-1 rounded border font-medium ' + (d.fuenteOk ? 'bg-slate-800 border-slate-700 text-slate-300' : 'bg-red-500/10 border-red-500/40 text-red-400')}>
           {d.fuenteOk ? 'Datos reales del comedor' : 'Sin respuesta del servicio de menús: usando los últimos datos'}
         </span>

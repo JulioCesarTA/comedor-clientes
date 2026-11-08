@@ -1,7 +1,8 @@
 'use client';
 import { CartesianGrid, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis } from 'recharts';
 import { Card, KPI } from '../components/Charts';
-import { hhmmss, useVivo } from '../lib/vivo';
+import { useVivo } from '../lib/vivo';
+import { BarraVivo } from '../components/BarraVivo';
 
 const COLORES = ['#10b981', '#06b6d4', '#f97316', '#8b5cf6', '#ef4444'];
 const ACCION: Record<string, string> = {
@@ -12,9 +13,16 @@ const ACCION: Record<string, string> = {
 const corto = (id: string) => id.replace('plato-', '');
 
 export function AgrupacionVivo() {
-  const { data: d, error, hora } = useVivo<any>('/ml/agrupar-platos', 10000);
+  const { data: d, error, hora, sinConexion, recargar } = useVivo<any>('/ml/agrupar-platos', 10000);
   if (!d) return <div className="px-8 py-10 text-slate-400">{error ? `No se pudo contactar al servidor (${error}). Reintentando…` : 'Agrupando platos…'}</div>;
-  if (!d.suficiente) return <div className="px-8"><div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-5 text-amber-200 text-sm">{d.mensaje}</div></div>;
+  if (!d.suficiente) return (
+    <div className="px-8 space-y-4">
+      <div className="flex flex-wrap items-center gap-3 text-xs">
+        <BarraVivo hora={hora} sinConexion={sinConexion} recargar={recargar} registros={d.registros} minimo={d.minimoRegistros} />
+      </div>
+      <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-5 text-amber-200 text-sm">{d.mensaje}</div>
+    </div>
+  );
 
   const colorDe = (cluster: number) => COLORES[cluster % COLORES.length];
   const puntos = d.puntos.map((p: any) => ({ ...p, x: +(p.aceptacion * 100).toFixed(1), y: +p.demandaMedia.toFixed(2) }));
@@ -22,7 +30,7 @@ export function AgrupacionVivo() {
   return (
     <div className="px-8 pb-8 space-y-6">
       <div className="flex flex-wrap items-center gap-3 text-xs">
-        <span className="px-2.5 py-1 rounded border bg-emerald-500/10 border-emerald-500/40 text-emerald-400 font-medium">En vivo · actualizado {hhmmss(hora)}</span>
+        <BarraVivo hora={hora} sinConexion={sinConexion} recargar={recargar} registros={d.registros} minimo={d.minimoRegistros} />
         <span className="text-slate-500">Se vuelve a agrupar cuando cambian las reservas o llegan fotos de bandejas</span>
       </div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
