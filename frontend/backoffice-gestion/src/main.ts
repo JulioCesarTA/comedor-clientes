@@ -5,8 +5,8 @@ import { Component, OnInit, OnDestroy, signal, inject, AfterViewInit, computed }
 import { FormsModule } from '@angular/forms';
 import { CommonModule, DecimalPipe, JsonPipe } from '@angular/common';
 
-const API_URL = (typeof window !== 'undefined' && (window as any).__API_URL__) || `http://${window.location.hostname}:8080`;
-const KC_URL = (typeof window !== 'undefined' && (window as any).__KC_URL__) || `http://${window.location.hostname}:8085`;
+const API_URL = (typeof window !== 'undefined' && (window as any).__API_URL__) || `${window.location.protocol}//${window.location.hostname}:8080`;
+const KC_URL = (typeof window !== 'undefined' && (window as any).__KC_URL__) || `${window.location.protocol}//${window.location.hostname}:8085`;
 
 // =================== ALMACENAMIENTO LOCAL Y AGENTE SIN CONEXIÓN ===================
 const LS = {

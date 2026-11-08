@@ -5,7 +5,7 @@ import { useEffect, useState, useMemo } from 'react';
 import axios from 'axios';
 import * as tf from '@tensorflow/tfjs';
 
-const API = (import.meta as any).env?.VITE_API_URL || `http://${window.location.hostname}:8080`;
+const API = (import.meta as any).env?.VITE_API_URL || `${window.location.protocol}//${window.location.hostname}:8080`;
 
 type Turno = 'DESAYUNO' | 'ALMUERZO' | 'CENA';
 

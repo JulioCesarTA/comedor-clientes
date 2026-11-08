@@ -15,7 +15,7 @@ export default function LoginPage() {
     setLoading(true); setErr('');
     try {
       const body = new URLSearchParams({ grant_type: 'password', client_id: 'inteligencia-negocio', username: user, password: pass });
-      const r = await fetch(`${process.env.NEXT_PUBLIC_KEYCLOAK_URL || `http://${window.location.hostname}:8085`}/realms/comedor-uagrm/protocol/openid-connect/token`, {
+      const r = await fetch(`${process.env.NEXT_PUBLIC_KEYCLOAK_URL || `${window.location.protocol}//${window.location.hostname}:8085`}/realms/comedor-uagrm/protocol/openid-connect/token`, {
         method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body
       });
       if (!r.ok) throw new Error('Credenciales inválidas');
