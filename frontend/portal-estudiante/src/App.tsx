@@ -234,7 +234,7 @@ export default function App() {
               <div className="relative flex-1">
                 
                 <input value={busqueda} onChange={e => setBusqueda(e.target.value)}
-                  placeholder="Buscar plato"
+                  placeholder="Buscar ensala"
                   className="w-full pl-4 pr-3 py-2.5 bg-slate-800 border border-slate-700 text-white rounded-lg" />
               </div>
               <select value={turno} onChange={e => setTurno(e.target.value as Turno)}
