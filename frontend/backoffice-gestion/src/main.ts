@@ -214,7 +214,7 @@ const propuestasLocales = () => LS.get<PropuestaLocal[]>('propuestas.local', [])
             <span class="text-white text-2xl font-bold tracking-tight">CU</span>
           </div>
           <h1 class="text-3xl font-bold text-white tracking-tight">Gestión operativa</h1>
-          <p class="text-slate-400 mt-2 text-sm">Panel administrativo</p>
+          <p class="text-slate-400 mt-2 text-sm">Panel administrativo UAGRM</p>
         </div>
         <form (ngSubmit)="login()" class="space-y-4">
           <div>
