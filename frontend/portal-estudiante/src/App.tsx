@@ -354,7 +354,7 @@ export default function App() {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {dias.length === 0 && <div className="col-span-full text-center py-10 text-slate-500">Sin menús publicados.</div>}
+              {dias.length === 0 && <div className="col-span-full text-center py-10 text-slate-500">{sinRed ? 'Todavía no hay una copia del menú en este equipo: ábrelo una vez con internet.' : 'Sin menús publicados.'}</div>}
               {dias.map(d => {
                 const delDia = reservasDelDia(d.fecha);
                 return (

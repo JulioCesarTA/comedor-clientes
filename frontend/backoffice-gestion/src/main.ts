@@ -50,10 +50,10 @@ const LS = {
 type Cargado<T> = { data: T; origen: 'red' | 'local'; fecha: string };
 
 // Intenta la red; si no hay conexión usa la última copia guardada. `campo` es el campo raíz de la consulta GraphQL.
-async function cargarConCache<T>(query: string, campo: string, clave: string): Promise<Cargado<T> | null> {
+async function cargarConCache<T>(query: string, campo: string, clave: string, variables: Record<string, any> = {}, ms = 4000): Promise<Cargado<T> | null> {
   try {
     if (!navigator.onLine) throw new Error('offline');
-    const data = (await gql<any>(query, {}, 4000))[campo];
+    const data = (await gql<any>(query, variables, ms))[campo];
     const fecha = new Date().toISOString();
     LS.set(clave, { data, fecha });
     return { data, origen: 'red', fecha };
@@ -433,7 +433,7 @@ class LoginComponent {
           </select>
         </header>
         <div class="flex-1 overflow-auto p-4 space-y-3">
-          <div *ngIf="dias().length === 0" class="text-center text-slate-500 text-sm py-10">Sin menús publicados para este turno.</div>
+          <div *ngIf="dias().length === 0" class="text-center text-slate-500 text-sm py-10">{{ sinCopia() ? 'Sin conexión: todavía no hay una copia de estos menús en este equipo.' : 'Sin menús publicados para este turno.' }}</div>
           <article *ngFor="let d of dias()" class="bg-slate-900/50 rounded-xl border border-slate-800 p-4">
             <div class="flex justify-between items-center mb-3">
               <span class="font-semibold text-white">{{ d.fecha }}</span>
@@ -488,6 +488,7 @@ class LoginComponent {
 class MenusComponent implements OnInit {
   turno = 'ALMUERZO';
   menus = signal<any[]>([]);
+  sinCopia = signal(false);
   insumos = signal<any[]>([]);
   stockBajo = signal<any[]>([]);
   // Un bloque por día: se fusionan los menús repetidos y se ordena por fecha.
@@ -507,10 +508,22 @@ class MenusComponent implements OnInit {
   });
   insumosOrdenados = computed(() => [...this.insumos()].sort((a, b) =>
     Number(this.stockTotal(a) > a.stockMinimo) - Number(this.stockTotal(b) > b.stockMinimo)));
-  ngOnInit() { this.load(); }
+  ngOnInit() {
+    this.load();
+    // Con conexión deja guardados también los otros turnos
+    if (navigator.onLine) for (const t of ['DESAYUNO', 'ALMUERZO', 'CENA']) if (t !== this.turno) this.menusDe(t);
+  }
+  private menusDe(t: string) {
+    return cargarConCache<any[]>('query($t: String!) { menusSemana(turno: $t) { fecha turno porciones { platoId cupo disponibles } } }',
+      'menusSemana', `menus.${t}`, { t }, 15000);
+  }
   load() {
-    gql<any>('query($t: String!) { menusSemana(turno: $t) { fecha turno porciones { platoId cupo disponibles } } }', { t: this.turno }, 15000)
-      .then(d => this.menus.set(d.menusSemana)).catch(() => this.menus.set([]));
+    const turno = this.turno;
+    this.menusDe(turno).then(c => {
+      if (turno !== this.turno) return;
+      this.menus.set(c?.data || []);
+      this.sinCopia.set(!c);
+    });
     cargarConCache<any[]>(Q_INSUMOS, 'insumos', 'insumos').then(c => {
       if (!c) return;
       this.insumos.set(c.data);
@@ -733,15 +746,15 @@ class AdminEstudiantesComponent implements OnInit {
 
   load() {
     llamar<any[]>('/usuarios', 'GET', undefined, 15000)
-      .then(d => this.usuarios.set(d || [])).catch(() => this.usuarios.set([]));
+      .then(d => { this.usuarios.set(d || []); LS.set('usuarios', d || []); })
+      .catch(() => this.usuarios.set(LS.get<any[]>('usuarios', [])));
     // Una sola consulta trae a los estudiantes con su beca (antes era una llamada por estudiante)
-    gql<any>(`{ estudiantes { id registroUniv nombre email telefono beca { ${Q_BECA} } } }`, {}, 30000)
-      .then(d => {
-        const lista = d.estudiantes || [];
+    cargarConCache<any[]>(`{ estudiantes { id registroUniv nombre email telefono beca { ${Q_BECA} } } }`, 'estudiantes', 'estudiantes', {}, 30000)
+      .then(c => {
+        const lista = c?.data || [];
         this.estudiantes.set(lista);
         this.becaMap.set(Object.fromEntries(lista.filter((e: any) => e.beca?.tieneBeca).map((e: any) => [e.id, e.beca])));
-      })
-      .catch(() => { this.estudiantes.set([]); this.becaMap.set({}); });
+      });
   }
 
   // Una fila por cuenta (Keycloak) + estudiantes del padrón que aún no tienen cuenta.
@@ -789,13 +802,13 @@ class AdminEstudiantesComponent implements OnInit {
   // Consulta federada: el gateway une al estudiante (comensales) con sus pagos (pagos).
   private cargarPagos(id: string) {
     this.pagosEstado.set('cargando');
-    gql<any>('query($id: ID!) { estudiante(id: $id) { pagos { id monto metodo estado fecha } } }', { id }, 15000)
-      .then(d => {
+    cargarConCache<any>('query($id: ID!) { estudiante(id: $id) { pagos { id monto metodo estado fecha } } }', 'estudiante', `pagos.${id}`, { id }, 15000)
+      .then(c => {
         if (this.seleccionado()?.id !== id) return;
-        this.pagos.set((d.estudiante?.pagos || []).sort((a: any, b: any) => b.fecha.localeCompare(a.fecha)));
+        if (!c) { this.pagosEstado.set('error'); return; }
+        this.pagos.set([...(c.data?.pagos || [])].sort((a: any, b: any) => b.fecha.localeCompare(a.fecha)));
         this.pagosEstado.set('listo');
-      })
-      .catch(() => { if (this.seleccionado()?.id === id) this.pagosEstado.set('error'); });
+      });
   }
 
   notif(msg: string, kind: 'ok'|'err' = 'ok') {
