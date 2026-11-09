@@ -128,7 +128,6 @@ export function ReportesIA() {
     setHayVoz(vozDisponible());
     leerGuardado<string[]>('historial').then(h => h && setHistorial(h));
     leerGuardado<Reporte>('ultimo').then(r => r && setRes(r));            // lo último visto
-    if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});   // para abrir la pantalla sin internet
     const estado = () => setSinConexion(!navigator.onLine);
     estado();
     const alVolver = () => { estado(); iniciar(false); };                // al volver internet se refrescan los datos

@@ -1,26 +1,56 @@
-// Service worker PWA — cache-first para shell y assets, network-first para API
-const CACHE = 'comedor-portal-v1';
-const SHELL = ['/', '/index.html'];
+// Service worker del portal cuando se abre solo, sin el shell (PWA).
+//  · Páginas: red primero; sin red, la copia guardada.
+//  · Archivos (propios y de CDN): del caché, y se renuevan por detrás.
+//  · La API NUNCA pasa por aquí: los datos sin conexión los guarda la app en IndexedDB.
+const CACHE = 'portal-v2';
 
-self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)));
-  self.skipWaiting();
+self.addEventListener('install', (e) => e.waitUntil((async () => {
+  const c = await caches.open(CACHE);
+  await c.addAll(['/', '/index.html', '/manifest.json', '/iconos/icono-192.png', '/iconos/icono-512.png']);
+  await self.skipWaiting();
+})()));
+
+self.addEventListener('activate', (e) => e.waitUntil((async () => {
+  for (const k of await caches.keys()) if (k !== CACHE) await caches.delete(k);
+  await self.clients.claim();
+})()));
+
+// La página avisa qué archivos cargó antes de que este service worker tomara el control.
+self.addEventListener('message', (e) => {
+  if (e.data?.tipo !== 'guardar') return;
+  e.waitUntil(caches.open(CACHE).then((c) => Promise.all(e.data.urls.map(async (u) => {
+    try {
+      if (await c.match(u)) return;
+      const r = await fetch(u, { mode: 'cors' }).catch(() => fetch(u, { mode: 'no-cors' }));
+      if (r.ok || r.type === 'opaque') await c.put(u, r);
+    } catch { /* se guardará al usarse */ }
+  }))));
 });
-self.addEventListener('activate', (e) => e.waitUntil(clients.claim()));
+
+async function delCacheYRenovar(req) {
+  const c = await caches.open(CACHE);
+  const guardada = await c.match(req);
+  const red = fetch(req).then((r) => {
+    if (r.ok || r.type === 'opaque') c.put(req, r.clone());
+    return r;
+  }).catch(() => guardada || Response.error());
+  return guardada || red;
+}
 
 self.addEventListener('fetch', (e) => {
-  const url = new URL(e.request.url);
-  // API: network-first con fallback a cache
-  if (url.pathname.startsWith('/menus') || url.pathname.startsWith('/estudiantes') || url.pathname.startsWith('/sagas')) {
-    e.respondWith(
-      fetch(e.request).then(r => {
-        const copy = r.clone();
-        caches.open(CACHE).then(c => c.put(e.request, copy));
+  const req = e.request;
+  if (req.method !== 'GET') return;
+  const url = new URL(req.url);
+  const propio = url.origin === self.location.origin;
+
+  if (req.mode === 'navigate') {
+    if (propio) {
+      e.respondWith(fetch(req).then((r) => {
+        if (r.ok) { const copia = r.clone(); caches.open(CACHE).then((c) => c.put('/index.html', copia)); }
         return r;
-      }).catch(() => caches.match(e.request))
-    );
+      }).catch(async () => (await caches.match('/index.html')) || Response.error()));
+    }
     return;
   }
-  // Shell: cache-first
-  e.respondWith(caches.match(e.request).then(r => r || fetch(e.request)));
+  if (propio || ['script', 'style', 'font', 'image'].includes(req.destination)) e.respondWith(delCacheYRenovar(req));
 });

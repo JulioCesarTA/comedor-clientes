@@ -161,7 +161,7 @@ const proxyAll = (patterns, target) => createProxyMiddleware({
   changeOrigin: true,
 });
 
-// El back-office habla SOLO GraphQL (SPEC §4): /graphql va al graphql-gateway, con el mismo control de token.
+// Núcleo del negocio del back-office (SPEC §4): /graphql va al gateway federado, con el mismo control de token.
 app.use(requireAuth, proxyAll(['/graphql'], GRAPHQL_URL));
 app.use(requireAuth, proxyAll(['/menus/**', '/insumos/**'], MENU_URL));
 app.use(requireAuth, proxyAll(['/reservas/**', '/estudiantes/**', '/ingreso/**', '/asistencia/**'], COMENSALES_URL));

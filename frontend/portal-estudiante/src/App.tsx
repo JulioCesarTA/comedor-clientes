@@ -59,6 +59,46 @@ const guardarPend = (u: string, id: string, info: any) => {
   try { const p = leerPend(u); if (info) p[id] = { ...info, t: Date.now() }; else delete p[id]; localStorage.setItem(PEND_KEY(u), JSON.stringify(p)); } catch { /* sin almacenamiento */ }
 };
 
+// Copia local (IndexedDB) de lo último recibido: sin conexión la pantalla muestra eso.
+const abrirCopias = () => new Promise<IDBDatabase>((ok, mal) => {
+  const r = indexedDB.open('portal', 1);
+  r.onupgradeneeded = () => r.result.createObjectStore('kv');
+  r.onsuccess = () => ok(r.result);
+  r.onerror = () => mal(r.error);
+});
+const guardarCopia = (clave: string, valor: unknown) =>
+  abrirCopias().then(db => { db.transaction('kv', 'readwrite').objectStore('kv').put(valor, clave); }).catch(() => {});
+const leerCopia = <T,>(clave: string) => abrirCopias().then(db => new Promise<T | undefined>(ok => {
+  const q = db.transaction('kv').objectStore('kv').get(clave);
+  q.onsuccess = () => ok(q.result);
+  q.onerror = () => ok(undefined);
+})).catch(() => undefined);
+
+/** Pide al servidor y guarda la copia. Sin red (o con el servidor caído) devuelve la última copia. */
+async function conCopia<T>(clave: string, ruta: string, params?: Record<string, string>): Promise<T | undefined> {
+  try {
+    const { data } = await axios.get<T>(`${API}${ruta}`, { params });
+    guardarCopia(clave, data);
+    return data;
+  } catch (e: any) {
+    if (e.response && e.response.status < 502) throw e;
+    return leerCopia<T>(clave);
+  }
+}
+
+const TURNOS: Turno[] = ['DESAYUNO', 'ALMUERZO', 'CENA'];
+const fechaIso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+function semanasDesdeHoy(): string[] {
+  const lunes = new Date();
+  lunes.setDate(lunes.getDate() - ((lunes.getDay() + 6) % 7));
+  const proxima = new Date(lunes);
+  proxima.setDate(lunes.getDate() + 7);
+  return [fechaIso(lunes), fechaIso(proxima)];
+}
+const menusDe = (t: Turno, inicio: string) => conCopia<any[]>(`menus.${t}.${inicio}`, `/menus/semana/${t}`, { inicio }).catch(() => undefined);
+
+const motivoError = (e: any) => e.response?.data?.detail || (e.response ? e.message : 'Sin conexión: esta acción necesita internet.');
+
 const esc = (t: any) => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 /** Factura / recibo de una ración pagada, lista para imprimir o guardar como PDF. */
@@ -96,17 +136,19 @@ export default function App() {
   const [busqueda, setBusqueda] = useState('');
   const [toast, setToast] = useState<{ msg: string, kind: 'ok' | 'err' } | null>(null);
   const [pagoOk, setPagoOk] = useState<PagoOk | null>(null);
+  const [sinRed, setSinRed] = useState(!navigator.onLine);
 
   // Las reservas y los pagos salen del servidor (no del navegador): se ven igual desde cualquier dispositivo
   const cargarReservas = async () => {
     if (!user) return;
     try {
       const [r, p] = await Promise.all([
-        axios.get(`${API}/estudiantes/${user}/reservas`),
-        axios.get(`${API}/pagos`, { params: { estudiante: user } }),
+        conCopia<ReservaSrv[]>(`reservas.${user}`, `/estudiantes/${user}/reservas`),
+        conCopia<PagoSrv[]>(`pagos.${user}`, '/pagos', { estudiante: user }),
       ]);
-      setReservas(r.data || []); setPagos(p.data || []);
-    } catch { /* sin conexión: se conserva lo que ya se mostraba */ }
+      if (r) setReservas(r);
+      if (p) setPagos(p);
+    } catch { /* el servidor rechazó la consulta: se conserva lo que ya se mostraba */ }
   };
   useEffect(() => { cargarReservas(); }, [user]);
   useEffect(() => { if (tab === 'reservas') cargarReservas(); }, [tab]);
@@ -114,14 +156,27 @@ export default function App() {
 
   // Semana actual y la siguiente, solo desde hoy en adelante (no tiene sentido reservar días pasados)
   useEffect(() => {
-    const f = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    const hoy = new Date();
-    const lunes = new Date(hoy); lunes.setDate(hoy.getDate() - ((hoy.getDay() + 6) % 7));
-    const proxima = new Date(lunes); proxima.setDate(lunes.getDate() + 7);
-    Promise.all([lunes, proxima].map(d => axios.get(`${API}/menus/semana/${turno}`, { params: { inicio: f(d) } }).then(r => r.data as any[]).catch(() => [] as any[])))
-      .then(([a, b]) => setMenus([...a, ...b].filter(m => m.fecha >= f(hoy))));
+    let vigente = true;
+    const hoy = fechaIso(new Date());
+    Promise.all(semanasDesdeHoy().map(inicio => menusDe(turno, inicio)))
+      .then(([a, b]) => { if (vigente) setMenus([...(a || []), ...(b || [])].filter(m => m.fecha >= hoy)); });
+    return () => { vigente = false; };
   }, [turno, recarga]);
-  useEffect(() => { if (user) axios.get(`${API}/estudiantes/${user}/beca`).then(r => setBeca(r.data)).catch(() => {}); }, [user]);
+  useEffect(() => { if (user) conCopia<any>(`beca.${user}`, `/estudiantes/${user}/beca`).then(b => { if (b) setBeca(b); }).catch(() => {}); }, [user]);
+
+  // Con conexión deja guardados también los otros turnos, para verlos después sin internet
+  useEffect(() => {
+    if (navigator.onLine) TURNOS.filter(t => t !== turno).forEach(t => semanasDesdeHoy().forEach(inicio => menusDe(t, inicio)));
+  }, []);
+
+  useEffect(() => {
+    const alCaer = () => setSinRed(true);
+    const alVolver = () => { setSinRed(false); setRecarga(n => n + 1); };
+    window.addEventListener('offline', alCaer);
+    window.addEventListener('online', alVolver);
+    return () => { window.removeEventListener('offline', alCaer); window.removeEventListener('online', alVolver); };
+  }, []);
+  useEffect(() => { if (recarga > 0) cargarReservas(); }, [recarga]);
 
   // Un solo bloque por día: se fusionan los menús repetidos y se ordena por fecha.
   const dias = useMemo(() => {
@@ -166,9 +221,9 @@ export default function App() {
       } else {
         notif('Reserva creada. Págala cuando quieras en «Mis reservas».', 'ok');
       }
-      cargarReservas(); recargarMenus();
+      recargarMenus();
     } catch (e: any) {
-      notif(e.response?.data?.detail || e.message, 'err');
+      notif(motivoError(e), 'err');
     } finally { setLoading(null); }
   };
 
@@ -183,7 +238,7 @@ export default function App() {
       if (res.data.status === 'PENDING_PAYMENT') { guardarPend(user, r.id, res.data.stripe); setReserva({ reservaId: r.id, stripe: res.data.stripe, monto }); }
       else { setPagoOk({ plato: r.platoId, fecha: r.fecha, turno: r.turno, monto, reservaId: r.id, qrDataUri: res.data.qr ? String(res.data.qr).split('::')[1] : undefined }); cargarReservas(); }
     } catch (e: any) {
-      notif(e.response?.data?.detail || e.message, 'err');
+      notif(motivoError(e), 'err');
     } finally { setPagando(null); }
   };
 
@@ -195,9 +250,9 @@ export default function App() {
       await axios.post(`${API}/sagas/cancelar-reserva`, { reserva_id: r.id });
       guardarPend(user, r.id, null);
       notif('Reserva cancelada', 'ok');
-      cargarReservas(); recargarMenus();
+      recargarMenus();
     } catch (e: any) {
-      notif(e.response?.data?.detail || e.message, 'err');
+      notif(motivoError(e), 'err');
     } finally { setPagando(null); }
   };
 
@@ -253,6 +308,11 @@ export default function App() {
   return (
     <div className="p-6 text-slate-100">
       <div className="max-w-6xl mx-auto">
+        {sinRed && (
+          <div className="mb-4 px-4 py-2 rounded-lg bg-amber-500/15 border border-amber-500/40 text-amber-300 text-sm">
+            Sin conexión: ves los últimos datos guardados. Para reservar, pagar o cancelar necesitas internet.
+          </div>
+        )}
         <header className="mb-6">
           <div className="flex items-center justify-between">
             <div>

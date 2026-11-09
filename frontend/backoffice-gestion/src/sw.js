@@ -2,7 +2,7 @@
 //  · Al instalarse guarda la página y los archivos de la compilación (los saca del propio index.html).
 //  · Páginas: red primero; sin red, la copia guardada (Angular se encarga de la ruta).
 //  · Archivos de la app y librerías de CDN (Tailwind, fuentes, lector de QR): se sirven del caché y se renuevan por detrás.
-//  · La API (/graphql en otro puerto) y Keycloak NUNCA pasan por aquí: los datos viven en IndexedDB y en la cola.
+//  · La API (en otro puerto) y Keycloak NUNCA pasan por aquí: los datos viven en IndexedDB y en la cola.
 const CACHE = 'backoffice-v1';
 const CDN = ['cdn.tailwindcss.com', 'fonts.googleapis.com', 'fonts.gstatic.com', 'cdn.jsdelivr.net'];
 

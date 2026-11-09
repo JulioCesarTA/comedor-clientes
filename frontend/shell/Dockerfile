@@ -13,6 +13,7 @@ ENV VITE_BI_URL=$VITE_BI_URL
 COPY package.json tsconfig.json vite.config.ts index.html ./
 RUN npm install --no-audit --no-fund
 COPY src ./src
+COPY public ./public
 RUN npm run build
 
 FROM nginx:alpine

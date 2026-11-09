@@ -1,7 +1,7 @@
 // Antes de mostrar una pantalla protegida comprueba que haya un token de Keycloak vigente; si no, manda al login.
 import { NextRequest, NextResponse } from 'next/server';
 
-const PUBLIC = ['/login', '/_next', '/favicon', '/api/health', '/sw.js'];
+const PUBLIC = ['/login', '/_next', '/favicon', '/api/health', '/sw.js', '/manifest.webmanifest', '/iconos'];
 
 function alLogin(req: NextRequest, params: Record<string, string>) {
   const url = req.nextUrl.clone();
@@ -32,5 +32,5 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|sw.js|login|api/health).*)'],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|sw.js|manifest.webmanifest|iconos|login|api/health).*)'],
 };

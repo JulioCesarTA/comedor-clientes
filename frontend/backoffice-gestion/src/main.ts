@@ -3,6 +3,7 @@ import { provideRouter, RouterOutlet, RouterLink, RouterLinkActive } from '@angu
 import { Component, OnInit, OnDestroy, signal, AfterViewInit, computed } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { CommonModule, DecimalPipe, JsonPipe } from '@angular/common';
+import { ApolloClient, HttpLink, InMemoryCache, gql as documento } from '@apollo/client/core';
 
 const API_URL = (typeof window !== 'undefined' && (window as any).__API_URL__) || `${window.location.protocol}//${window.location.hostname}:8080`;
 const KC_URL = (typeof window !== 'undefined' && (window as any).__KC_URL__) || `${window.location.protocol}//${window.location.hostname}:8085`;
@@ -75,44 +76,83 @@ function authHeaders(): Record<string, string> {
   return t ? { Authorization: `Bearer ${t}` } : {};
 }
 
-// El back-office habla con el servidor SOLO por GraphQL (SPEC §4): POST /graphql en el api-gateway, que pasa al
-// graphql-gateway. Con tiempo límite: si el servidor no responde se trata como "sin conexión".
+function sinConexion(detalle = 'Sin conexión con el servidor'): Error {
+  const err: any = new Error(detalle);
+  err.sinRed = true;
+  return err;
+}
+
+function rechazo(motivo: string): Error {
+  const err: any = new Error(motivo);
+  err.detalle = motivo;
+  return err;
+}
+
+// Núcleo del negocio (menú, inventario, comensales y pagos): Apollo Client contra el gateway federado (SPEC §4).
+// Lo guardado para trabajar sin conexión vive en IndexedDB, por eso Apollo no usa su caché.
+const apollo = new ApolloClient({
+  link: new HttpLink({ uri: `${API_URL}/graphql` }),
+  cache: new InMemoryCache({ addTypename: false }),
+  queryDeduplication: false,
+});
+
+// Con tiempo límite: si el servidor no responde se trata como "sin conexión".
 async function gql<T = any>(query: string, variables: Record<string, any> = {}, ms = 6000): Promise<T> {
+  const doc = documento(query);
   const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), ms);
+  const context = { headers: authHeaders(), fetchOptions: { signal: ctl.signal } };
+  let reloj: ReturnType<typeof setTimeout> | undefined;
+  const limite = new Promise<never>((_, mal) => { reloj = setTimeout(() => { ctl.abort(); mal(sinConexion()); }, ms); });
+  try {
+    const esMutacion = (doc.definitions[0] as any).operation === 'mutation';
+    const r = await Promise.race([
+      esMutacion ? apollo.mutate({ mutation: doc, variables, context, fetchPolicy: 'no-cache' })
+        : apollo.query({ query: doc, variables, context, fetchPolicy: 'no-cache' }),
+      limite,
+    ]);
+    return structuredClone(r.data) as T;
+  } catch (e: any) {
+    if (e.sinRed) throw e;
+    const red = e.networkError, estado: number | undefined = red?.statusCode;
+    if (red && (!estado || estado >= 502)) throw sinConexion(estado ? `Servidor no disponible (${estado})` : undefined);
+    throw rechazo(e.graphQLErrors?.[0]?.message || red?.result?.errors?.[0]?.message || (estado ? `El servidor respondió ${estado}` : e.message));
+  } finally { clearTimeout(reloj); }
+}
+
+// Cuentas de usuario y panel de agentes: fuera del núcleo del negocio, van por REST.
+async function llamar<T = any>(ruta: string, metodo = 'GET', cuerpo?: any, ms = 6000): Promise<T> {
+  const ctl = new AbortController();
+  const reloj = setTimeout(() => ctl.abort(), ms);
   try {
     let r: Response;
     try {
-      r = await fetch(`${API_URL}/graphql`, {
-        method: 'POST', signal: ctl.signal,
+      r = await fetch(`${API_URL}${ruta}`, {
+        method: metodo, signal: ctl.signal,
         headers: { 'content-type': 'application/json', ...authHeaders() },
-        body: JSON.stringify({ query, variables }),
+        body: cuerpo === undefined ? undefined : JSON.stringify(cuerpo),
       });
-    } catch {                                     // sin red o el servidor no respondió a tiempo
-      const err: any = new Error('Sin conexión con el servidor');
-      err.sinRed = true;
-      throw err;
-    }
-    if (r.status >= 502) { const err: any = new Error(`Servidor no disponible (${r.status})`); err.sinRed = true; throw err; }
+    } catch { throw sinConexion(); }             // sin red o el servidor no respondió a tiempo
+    if (r.status >= 502) throw sinConexion(`Servidor no disponible (${r.status})`);
     const j = await r.json().catch(() => null);
-    const motivo = j?.errors?.[0]?.message;
-    if (!r.ok || motivo) {
-      const err: any = new Error(motivo || `El servidor respondió ${r.status}`);
-      err.detalle = err.message;
-      throw err;
+    if (!r.ok) {
+      const motivo = [j?.detail, j?.message, j?.error].find((m) => typeof m === 'string');
+      throw rechazo(motivo || `El servidor respondió ${r.status}`);
     }
-    return j.data as T;
-  } finally { clearTimeout(t); }
+    return j as T;
+  } finally { clearTimeout(reloj); }
 }
 
 // =================== COLA DE SINCRONIZACIÓN (SPEC §6) ===================
 // Una operación hecha sin conexión entra en la cola (guardada en IndexedDB). Al volver la red se envía en orden,
 // con reintentos a 1, 2, 4 y 8 segundos. Cada operación muestra su estado: pendiente, sincronizada o error.
+// `query` es una mutación GraphQL o, si empieza con "/", una ruta REST a la que se hace POST con `variables`.
 type Operacion = {
   id: string; descripcion: string; query: string; variables: Record<string, any>;
   estado: 'pendiente' | 'sincronizada' | 'error'; intentos: number; error?: string; creada: number; enviada?: number;
 };
 const ESPERAS_S = [1, 2, 4, 8];
+const enviarOp = (query: string, variables: Record<string, any>, ms: number) =>
+  query.startsWith('/') ? llamar(query, 'POST', variables, ms) : gql(query, variables, ms);
 const cola = signal<Operacion[]>([]);          // se llena desde IndexedDB al arrancar
 const enLinea = signal(typeof navigator === 'undefined' ? true : navigator.onLine);
 let sincronizando = false;
@@ -142,7 +182,7 @@ async function sincronizarCola(): Promise<void> {
       for (let i = 0; i <= ESPERAS_S.length && !hecho; i++) {
         if (i > 0) await esperar(ESPERAS_S[i - 1]);
         try {
-          await gql(op.query, op.variables, 20000);
+          await enviarOp(op.query, op.variables, 20000);
           actualizarOp(op.id, { estado: 'sincronizada', enviada: Date.now(), error: undefined, intentos: op.intentos + i + 1 });
           hecho = true;
         } catch (e: any) {
@@ -162,7 +202,7 @@ async function sincronizarCola(): Promise<void> {
 /** Ejecuta una mutación; si no hay conexión la deja en la cola. Lanza el error si el servidor la rechazó. */
 async function ejecutarOEncolar(descripcion: string, query: string, variables: Record<string, any>): Promise<'enviada' | 'en_cola'> {
   if (navigator.onLine) {
-    try { await gql(query, variables, 15000); return 'enviada'; }
+    try { await enviarOp(query, variables, 15000); return 'enviada'; }
     catch (e: any) { if (!e.sinRed) throw e; }
   }
   guardarCola([...cola(), { id: crypto.randomUUID(), descripcion, query, variables, estado: 'pendiente', intentos: 0, creada: Date.now() }]);
@@ -179,13 +219,16 @@ function quitarOp(id: string) { guardarCola(cola().filter((o) => o.id !== id)); 
 
 const EN_COLA = 'Sin conexión: quedó en la cola y se enviará sola al volver la red.';
 
+const decidirPropuesta = (id: string, aprobar: boolean) =>
+  llamar(`/agentes/propuestas/${id}/${aprobar ? 'aprobar' : 'rechazar'}`, 'POST', {}, 20000);
+
 const Q_INSUMOS = '{ insumos { id nombre unidad stockMinimo stockTotal } }';
 const Q_BECA = 'tieneBeca tipo cupoRacionesMes racionesUsadasMes cubreHoy vigenteDesde vigenteHasta';
 
 // Guarda el paquete cada vez que hay conexión; sin conexión usa el último guardado.
 async function cargarPaquete(): Promise<{ data: Paquete; origen: 'red' | 'local' } | null> {
   try {
-    const data = (await gql<any>('{ paqueteOffline }', {}, 60000)).paqueteOffline;
+    const data = await llamar<Paquete>('/agentes/paquete-offline', 'GET', undefined, 60000);
     LS.set('paquete', data);
     return { data, origen: 'red' };
   } catch {
@@ -645,6 +688,20 @@ class MenusComponent implements OnInit {
               </button>
             </div>
           </div>
+
+          <!-- Pagos -->
+          <div *ngIf="seleccionado()" class="bg-slate-800/40 border border-slate-700 rounded-xl p-6">
+            <h3 class="text-sm text-slate-300 uppercase mb-3 font-semibold tracking-wider">Pagos del estudiante</h3>
+            <p *ngIf="pagosEstado() === 'cargando'" class="text-xs text-slate-500">Cargando…</p>
+            <p *ngIf="pagosEstado() === 'error'" class="text-xs text-slate-500">No se pudieron cargar los pagos.</p>
+            <ng-container *ngIf="pagosEstado() === 'listo'">
+              <p class="text-xs text-slate-400 mb-3">{{ pagos().length === 0 ? 'Sin pagos registrados.' : pagos().length + ' pagos en total. Los más recientes:' }}</p>
+              <div *ngFor="let p of pagos().slice(0, 5)" class="flex justify-between gap-3 py-1.5 border-t border-slate-700/60 text-xs">
+                <span class="text-slate-300">{{ p.fecha.slice(0, 10) }} · {{ p.metodo }}</span>
+                <span class="text-white font-semibold">{{ p.monto | number:'1.2-2' }} Bs · {{ p.estado }}</span>
+              </div>
+            </ng-container>
+          </div>
         </div>
       </div>
 
@@ -659,6 +716,8 @@ class AdminEstudiantesComponent implements OnInit {
   seleccionado = signal<any>(null);
   becaActual = signal<any>(null);
   becaMap = signal<Record<string, any>>({});
+  pagos = signal<any[]>([]);
+  pagosEstado = signal<'cargando' | 'listo' | 'error'>('cargando');
   filtro = '';
   nuevoRegistro = ''; nuevoNombre = ''; nuevoEmail = ''; nuevoTel = '';
   nuevoRol: 'estudiante'|'cocinero'|'administrador' = 'estudiante';
@@ -673,8 +732,8 @@ class AdminEstudiantesComponent implements OnInit {
   ngOnInit() { this.load(); }
 
   load() {
-    gql<any>('{ usuarios { username nombre email enabled roles } }', {}, 15000)
-      .then(d => this.usuarios.set(d.usuarios || [])).catch(() => this.usuarios.set([]));
+    llamar<any[]>('/usuarios', 'GET', undefined, 15000)
+      .then(d => this.usuarios.set(d || [])).catch(() => this.usuarios.set([]));
     // Una sola consulta trae a los estudiantes con su beca (antes era una llamada por estudiante)
     gql<any>(`{ estudiantes { id registroUniv nombre email telefono beca { ${Q_BECA} } } }`, {}, 30000)
       .then(d => {
@@ -724,6 +783,19 @@ class AdminEstudiantesComponent implements OnInit {
       gql<any>(`query($id: ID!) { beca(estudianteId: $id) { ${Q_BECA} } }`, { id: e.id })
         .then(d => this.becaActual.set(d.beca?.tieneBeca ? d.beca : null)).catch(() => {});
     }
+    this.cargarPagos(e.id);
+  }
+
+  // Consulta federada: el gateway une al estudiante (comensales) con sus pagos (pagos).
+  private cargarPagos(id: string) {
+    this.pagosEstado.set('cargando');
+    gql<any>('query($id: ID!) { estudiante(id: $id) { pagos { id monto metodo estado fecha } } }', { id }, 15000)
+      .then(d => {
+        if (this.seleccionado()?.id !== id) return;
+        this.pagos.set((d.estudiante?.pagos || []).sort((a: any, b: any) => b.fecha.localeCompare(a.fecha)));
+        this.pagosEstado.set('listo');
+      })
+      .catch(() => { if (this.seleccionado()?.id === id) this.pagosEstado.set('error'); });
   }
 
   notif(msg: string, kind: 'ok'|'err' = 'ok') {
@@ -747,7 +819,7 @@ class AdminEstudiantesComponent implements OnInit {
     this.creando = true;
     const rol = this.nuevoRol;
     const usuario = rol === 'estudiante' ? this.nuevoRegistro.trim() : this.nuevoUsuario.trim();
-    ejecutarOEncolar(`Crear cuenta ${usuario} (${rol})`, 'mutation($d: UsuarioIn!) { crearUsuario(datos: $d) }', { d: {
+    ejecutarOEncolar(`Crear cuenta ${usuario} (${rol})`, '/usuarios', {
       rol,
       registroUniv: this.nuevoRegistro.trim(),
       username: this.nuevoUsuario.trim(),
@@ -755,7 +827,7 @@ class AdminEstudiantesComponent implements OnInit {
       email: this.nuevoEmail.trim(),
       telefono: this.nuevoTel,
       password: this.nuevaPassword,
-    } }).then(r => {
+    }).then(r => {
       this.creando = false;
       this.notif(r === 'en_cola' ? `${EN_COLA} Contraseña de «${usuario}»: ${this.verPassword ? this.nuevaPassword : 'la ingresada'}`
         : `Usuario «${usuario}» creado (${rol}). Contraseña: ${this.verPassword ? this.nuevaPassword : 'la ingresada'}`);
@@ -768,7 +840,7 @@ class AdminEstudiantesComponent implements OnInit {
     const est = this.seleccionado();
     if (!est) return;
     ejecutarOEncolar(`Beca ${this.nuevoTipoBeca} para ${est.nombre}`,
-      'mutation($id: ID!, $t: String!, $m: Int!) { asignarBeca(estudianteId: $id, tipo: $t, mesesVigencia: $m) }',
+      'mutation($id: ID!, $t: String!, $m: Int!) { asignarBeca(estudianteId: $id, tipo: $t, mesesVigencia: $m) { tieneBeca } }',
       { id: est.id, t: this.nuevoTipoBeca, m: Number(this.nuevoMesesVig) })
       .then(r => { if (r === 'en_cola') { this.notif(EN_COLA); return; } this.notif(`Beca ${this.nuevoTipoBeca} asignada a ${est.nombre}`); this.becaMap.update(m => { const x = { ...m }; delete x[est.id]; return x; }); this.elegir(est); this.load(); })
       .catch(e => this.notif('Error: ' + e.message, 'err'));
@@ -879,7 +951,7 @@ class AdminOperacionComponent implements OnInit {
     const platos = this.menuPlatos.filter(p => p.id).map(p => ({ platoId: p.id, cupo: Number(p.cupo) }));
     if (platos.length === 0) return this.notif('Debe agregar al menos un plato', 'err');
     ejecutarOEncolar(`Publicar menú ${this.menuTurno.toLowerCase()} del ${this.menuFecha}`,
-      'mutation($f: String!, $t: String!, $p: [PlatoIn!]!) { publicarMenu(fecha: $f, turno: $t, platos: $p) }',
+      'mutation($f: String!, $t: String!, $p: [PlatoIn!]!) { publicarMenu(fecha: $f, turno: $t, platos: $p) { id } }',
       { f: this.menuFecha, t: this.menuTurno, p: platos })
       .then(r => { this.notif(r === 'en_cola' ? EN_COLA : 'Menú publicado'); this.menuPlatos = [{ id: '', cupo: 50 }]; })
       .catch(e => this.notif('Error: ' + e.message, 'err'));
@@ -889,7 +961,7 @@ class AdminOperacionComponent implements OnInit {
     const insumo = this.insumos().find(i => i.id === this.insSel);
     const unidad = insumo?.unidad || 'kg';
     ejecutarOEncolar(`Recibir ${Number(this.loteCant)} ${unidad} de ${insumo?.nombre || this.insSel}`,
-      'mutation($i: ID!, $l: String!, $c: Float!, $u: String!, $v: String!) { registrarLote(insumoId: $i, loteId: $l, cantidad: $c, unidad: $u, vence: $v) }', {
+      'mutation($i: ID!, $l: String!, $c: Float!, $u: String!, $v: String!) { registrarLote(insumoId: $i, loteId: $l, cantidad: $c, unidad: $u, vence: $v) { ok } }', {
       i: this.insSel, l: loteId, c: Number(this.loteCant), u: unidad,
       v: this.loteVence || new Date(Date.now()+30*24*3600*1000).toISOString().slice(0,10)
     })
@@ -899,7 +971,7 @@ class AdminOperacionComponent implements OnInit {
   crearInsumo() {
     const id = this.insNuevoNombre.toUpperCase().replace(/\s+/g, '_');
     ejecutarOEncolar(`Crear insumo ${this.insNuevoNombre}`,
-      'mutation($id: ID!, $n: String!, $u: String!, $m: Float!) { crearInsumo(id: $id, nombre: $n, unidad: $u, stockMinimo: $m) }',
+      'mutation($id: ID!, $n: String!, $u: String!, $m: Float!) { crearInsumo(id: $id, nombre: $n, unidad: $u, stockMinimo: $m) { id } }',
       { id, n: this.insNuevoNombre, u: this.insNuevaUnidad, m: Number(this.insNuevoMin) })
       .then(r => { this.notif(r === 'en_cola' ? EN_COLA : 'Insumo creado'); this.insNuevoNombre = ''; this.load(); })
       .catch(e => this.notif('Error: ' + e.message, 'err'));
@@ -1146,7 +1218,7 @@ class AgentesComponent implements OnInit, OnDestroy {
   }
 
   private async cargarHorarios() {
-    const h = (await gql<any>('{ horarios }')).horarios;
+    const h = await llamar<any>('/agentes/horarios');
     this.horarios.set(h);
     this.borrador.update(b => {
       const nuevo = { ...b };
@@ -1169,8 +1241,8 @@ class AgentesComponent implements OnInit, OnDestroy {
     const b = this.borrador()[n];
     this.guardandoH.set(n);
     try {
-      const r = (await gql<any>('mutation($a: String!, $h: JSON!) { guardarHorario(agente: $a, horario: $h) }', { a: n, h: {
-        activo: b.activo, modo: b.modo, cadaMin: Math.round(Number(b.valor) * Number(b.unidad)), hora: b.hora, dias: b.dias } }, 10000)).guardarHorario;
+      const r = await llamar<any>(`/agentes/horarios/${n}`, 'PUT', {
+        activo: b.activo, modo: b.modo, cadaMin: Math.round(Number(b.valor) * Number(b.unidad)), hora: b.hora, dias: b.dias }, 10000);
       this.horarios.update(x => ({ ...x, [n]: r }));
       this.borrador.update(x => ({ ...x, [n]: this.aBorrador(r.horario) }));
       this.msgH.update(x => ({ ...x, [n]: 'Guardado. ' + (r.horario.activo ? 'Se ejecutará solo según este horario.' : 'Quedó pausada.') }));
@@ -1185,11 +1257,11 @@ class AgentesComponent implements OnInit, OnDestroy {
 
   async refrescar() {
     try {
-      const { propuestas: lista, telegram: tg } = await gql<any>('{ propuestas telegram }');
+      const [lista, tg] = await Promise.all([llamar<any[]>('/agentes/propuestas'), llamar<any>('/agentes/telegram')]);
       this.servidor.set(true); this.tg.set(tg);
       this.cargarHorarios().catch(() => {});
       LS.set('propuestas.servidor', lista);
-      if (await this.sincronizar()) { this.propuestas.set(this.mezclar((await gql<any>('{ propuestas }')).propuestas)); }
+      if (await this.sincronizar()) { this.propuestas.set(this.mezclar(await llamar<any[]>('/agentes/propuestas'))); }
       else this.propuestas.set(this.mezclar(lista));
       if (Date.now() - this.ultimoPaquete > 10 * 60 * 1000) {      // deja datos frescos para trabajar sin conexión
         this.ultimoPaquete = Date.now();
@@ -1208,12 +1280,12 @@ class AgentesComponent implements OnInit, OnDestroy {
     const locales = propuestasLocales(), decisiones = LS.get<any[]>('decisiones', []);
     if (!locales.length && !decisiones.length) return false;
     if (locales.length) {
-      await gql('mutation($i: JSON!) { sincronizarPropuestas(items: $i) }', { i: locales.map(p =>
-        ({ tipo: p.tipo, clave: p.clave, titulo: p.titulo, resumen: p.resumen, payload: p.payload, decision: p.decision ?? null })) }, 20000);
+      await llamar('/agentes/propuestas/sincronizar', 'POST', locales.map(p =>
+        ({ tipo: p.tipo, clave: p.clave, titulo: p.titulo, resumen: p.resumen, payload: p.payload, decision: p.decision ?? null })), 20000);
       LS.set('propuestas.local', []);
     }
     for (const d of decisiones) {
-      try { await gql('mutation($id: ID!, $a: Boolean!) { decidirPropuesta(id: $id, aprobar: $a) }', { id: d.id, a: d.aprobar }, 20000); } catch {}
+      try { await decidirPropuesta(d.id, d.aprobar); } catch {}
     }
     LS.set('decisiones', []);
     return true;
@@ -1244,7 +1316,7 @@ class AgentesComponent implements OnInit, OnDestroy {
         LS.set('propuestas.local', propuestasLocales().map(x => x.id === p.id ? { ...x, decision: aprobar ? 'aprobar' : 'rechazar',
           estado: aprobar ? 'APROBADA' : 'RECHAZADA', resultado: 'Decidida sin conexión: se aplicará al volver la conexión.' } : x));
       } else {
-        try { await gql('mutation($id: ID!, $a: Boolean!) { decidirPropuesta(id: $id, aprobar: $a) }', { id: p.id, a: aprobar }, 20000); }
+        try { await decidirPropuesta(p.id, aprobar); }
         catch { LS.set('decisiones', [...LS.get<any[]>('decisiones', []), { id: p.id, aprobar }]); }
       }
     } finally { this.resolviendo.set(null); }
@@ -1257,8 +1329,7 @@ class AgentesComponent implements OnInit, OnDestroy {
     try {
       let r: any, offline = false;
       try {
-        r = (await gql<any>('mutation($a: String!, $o: String!) { ejecutarAgente(agente: $a, objetivo: $o) }',
-          { a: name, o: 'Reporte operativo' }, 120000)).ejecutarAgente;
+        r = await llamar<any>(`/agentes/${name}`, 'POST', { objetivo: 'Reporte operativo', contexto: {} }, 120000);
       } catch {
         offline = true;
         const q = await cargarPaquete();

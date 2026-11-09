@@ -1,7 +1,7 @@
 import React, { Suspense, useEffect, useState, lazy } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Routes, Route, NavLink, useNavigate, Navigate } from 'react-router-dom';
-import { keycloak } from './keycloak';
+import { keycloak, KC_URL } from './keycloak';
 
 const BI_URL = import.meta.env.VITE_BI_URL || 'http://localhost:3003';
 const BACKOFFICE_URL = import.meta.env.VITE_BACKOFFICE_URL || 'http://localhost:3001';
@@ -22,7 +22,34 @@ function RemoteFallback({ name }: { name: string }) {
   );
 }
 
-function LoginScreen() {
+// ¿Se puede llegar a Keycloak? navigator.onLine no alcanza: hay wifi sin internet, y sin Keycloak el login deja la app.
+async function hayKeycloak(): Promise<boolean> {
+  if (!navigator.onLine) return false;
+  try {
+    await fetch(`${KC_URL}/realms/comedor-uagrm/.well-known/openid-configuration`, { mode: 'no-cors', cache: 'no-store', signal: AbortSignal.timeout(4000) });
+    return true;
+  } catch { return false; }
+}
+
+function datosDelToken(token: string): { user: string; roles: string[] } | null {
+  try {
+    const t = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+    return {
+      user: t.preferred_username || '',
+      roles: (t.realm_access?.roles || []).filter((r: string) => !r.startsWith('default-') && !r.startsWith('offline') && !r.startsWith('uma')),
+    };
+  } catch { return null; }
+}
+
+// La sesión guardada se borra siempre: es la que permite entrar sin conexión.
+function cerrarSesion() {
+  localStorage.removeItem('kc_token');
+  document.cookie = 'kc_token=; path=/; max-age=0';
+  if (keycloak.authenticated) keycloak.logout({ redirectUri: window.location.origin });
+  else window.location.reload();
+}
+
+function LoginScreen({ sinRed }: { sinRed: boolean }) {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 px-4">
       <div className="w-full max-w-md p-10 bg-slate-800/60 backdrop-blur rounded-2xl border border-slate-700 shadow-2xl">
@@ -33,8 +60,11 @@ function LoginScreen() {
           <h1 className="text-3xl font-bold text-white tracking-tight">Comedor Universitario</h1>
           <p className="text-slate-400 mt-2 text-sm">Plataforma de gestión integral</p>
         </div>
-        <button onClick={() => keycloak.login({ redirectUri: window.location.origin + '/' })}
-          className="w-full py-4 bg-gradient-to-r from-orange-500 to-amber-600 text-white font-semibold rounded-xl shadow-lg hover:brightness-110 transition">
+        {sinRed && (
+          <p className="text-sm text-amber-300 text-center mb-4">Sin conexión. Para ingresar por primera vez en este equipo necesitas internet.</p>
+        )}
+        <button disabled={sinRed} onClick={() => keycloak.login({ redirectUri: window.location.origin + '/' })}
+          className="w-full py-4 bg-gradient-to-r from-orange-500 to-amber-600 text-white font-semibold rounded-xl shadow-lg hover:brightness-110 transition disabled:opacity-50">
           Ingresar al sistema
         </button>
         <p className="text-xs text-slate-500 text-center mt-6">
@@ -128,7 +158,7 @@ function Sidebar({ user, roles }: { user: string; roles: string[] }) {
             </div>
           </div>
         </div>
-        <button onClick={() => keycloak.logout({ redirectUri: window.location.origin })}
+        <button onClick={cerrarSesion}
           className="w-full py-2 text-xs text-slate-400 hover:text-red-400 transition">
           Cerrar sesión
         </button>
@@ -196,47 +226,93 @@ function MicrofrontendIframe({ baseUrl, token, title }: { baseUrl: string; token
   return <iframe ref={iframeRef} src={url} className="w-full h-screen border-0 block" title={title} />;
 }
 
+// Con conexión, carga una vez por sesión los módulos permitidos: instalan su service worker y luego abren sin internet.
+function PrecargaOffline({ roles }: { roles: string[] }) {
+  const [marcos, setMarcos] = useState<string[]>([]);
+  useEffect(() => {
+    if (!navigator.onLine || sessionStorage.getItem('shell.precarga')) return;
+    sessionStorage.setItem('shell.precarga', '1');
+    const accesos = rolesParaAcceso(roles);
+    const puede = (key: string) => MODULOS.find(m => m.key === key)!.roles.some(r => accesos.includes(r));
+    const espera = setTimeout(() => {
+      // @ts-expect-error federated module
+      if (puede('portal')) import('portal/App').catch(() => {});
+      setMarcos([...(puede('backoffice') ? [BACKOFFICE_URL] : []), ...(puede('bi') ? [BI_URL] : [])]);
+    }, 3000);
+    const fin = setTimeout(() => setMarcos([]), 45000);
+    return () => { clearTimeout(espera); clearTimeout(fin); };
+  }, [roles]);
+  return <>{marcos.map(u => <iframe key={u} src={u} title="Precarga" aria-hidden="true" tabIndex={-1} style={{ display: 'none' }} />)}</>;
+}
+
 function App() {
   const [ready, setReady] = useState(false);
   const [auth, setAuth] = useState(false);
   const [user, setUser] = useState('');
   const [roles, setRoles] = useState<string[]>([]);
   const [token, setToken] = useState('');
+  const [sinKeycloak, setSinKeycloak] = useState(false);
+  const [enLinea, setEnLinea] = useState(navigator.onLine);
 
   useEffect(() => {
-    keycloak.init({ onLoad: 'check-sso', checkLoginIframe: false, pkceMethod: 'S256' })
-      .then(a => {
-        setReady(true); setAuth(a);
-        if (a && keycloak.tokenParsed) {
-          setUser((keycloak.tokenParsed as any).preferred_username || '');
-          setRoles(((keycloak.tokenParsed as any).realm_access?.roles || [])
-            .filter((r: string) => !r.startsWith('default-') && !r.startsWith('offline') && !r.startsWith('uma')));
-          setToken(keycloak.token || '');
-          localStorage.setItem('kc_token', keycloak.token || '');
-          document.cookie = `kc_token=${keycloak.token}; path=/`;
-          (window as any).__KEYCLOAK_TOKEN__ = keycloak.token;
-        }
-      }).catch(e => { setReady(true); console.error('kc init', e); });
+    hayKeycloak().then(hay => {
+      if (!hay) {                     // sin conexión se entra con la última sesión guardada en este equipo
+        const guardado = localStorage.getItem('kc_token') || '';
+        const datos = datosDelToken(guardado);
+        setSinKeycloak(true);
+        if (datos) { setUser(datos.user); setRoles(datos.roles); setToken(guardado); setAuth(true); }
+        setReady(true);
+        return;
+      }
+      return keycloak.init({ onLoad: 'check-sso', checkLoginIframe: false, pkceMethod: 'S256' })
+        .then(a => {
+          setReady(true); setAuth(a);
+          const datos = a ? datosDelToken(keycloak.token || '') : null;
+          if (datos) {
+            setUser(datos.user);
+            setRoles(datos.roles);
+            setToken(keycloak.token || '');
+            localStorage.setItem('kc_token', keycloak.token || '');
+            document.cookie = `kc_token=${keycloak.token}; path=/`;
+            (window as any).__KEYCLOAK_TOKEN__ = keycloak.token;
+          }
+        }).catch(e => { setReady(true); console.error('kc init', e); });
+    });
 
     const i = setInterval(() => {
       if (keycloak.authenticated) {
         keycloak.updateToken(70).then(() => {
           localStorage.setItem('kc_token', keycloak.token || '');
           setToken(keycloak.token || '');
-        }).catch(() => keycloak.logout());
+        }).catch(() => hayKeycloak().then(hay => { if (hay) cerrarSesion(); }));   // sin red no se cierra la sesión
       }
     }, 60000);
     return () => clearInterval(i);
   }, []);
 
+  useEffect(() => {
+    const alCaer = () => setEnLinea(false);
+    // Si se entró sin conexión, al volver la red se recarga para renovar la sesión con Keycloak.
+    const alVolver = () => { setEnLinea(true); if (sinKeycloak) window.location.reload(); };
+    window.addEventListener('offline', alCaer);
+    window.addEventListener('online', alVolver);
+    return () => { window.removeEventListener('offline', alCaer); window.removeEventListener('online', alVolver); };
+  }, [sinKeycloak]);
+
   if (!ready) return <div className="min-h-screen bg-slate-900 flex items-center justify-center text-slate-400">Cargando…</div>;
-  if (!auth) return <LoginScreen />;
+  if (!auth) return <LoginScreen sinRed={sinKeycloak} />;
 
   return (
     <BrowserRouter>
       <div className="flex min-h-screen bg-slate-900">
         <Sidebar user={user} roles={roles} />
+        {!sinKeycloak && <PrecargaOffline roles={roles} />}
         <main className="flex-1 overflow-auto">
+          {(!enLinea || sinKeycloak) && (
+            <div className="px-4 py-2 bg-amber-500/15 border-b border-amber-500/40 text-amber-300 text-xs">
+              Sin conexión: trabajas con los últimos datos guardados en este equipo.
+            </div>
+          )}
           <Suspense fallback={<div className="p-12 text-slate-400">Cargando módulo…</div>}>
             <Routes>
               <Route path="/" element={<HomePage user={user} roles={roles} />} />
@@ -253,3 +329,15 @@ function App() {
 }
 
 createRoot(document.getElementById('root')!).render(<App />);
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+    navigator.serviceWorker.ready.then((r) => {
+      const urls = performance.getEntriesByType('resource')
+        .filter((e) => ['script', 'link', 'css', 'img'].includes((e as PerformanceResourceTiming).initiatorType))
+        .map((e) => e.name);
+      r.active?.postMessage({ tipo: 'guardar', urls });
+    });
+  });
+}

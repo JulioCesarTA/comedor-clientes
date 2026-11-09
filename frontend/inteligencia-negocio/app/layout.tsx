@@ -1,8 +1,9 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { Inter } from 'next/font/google';
 import { headers } from 'next/headers';
 import SSOReceiver from './components/SSOReceiver';
 import EmbedShell from './components/EmbedShell';
+import RegistrarPwa from './components/RegistrarPwa';
 import './globals.css';
 
 const inter = Inter({ subsets: ['latin'], display: 'swap' });
@@ -15,7 +16,11 @@ export const metadata: Metadata = {
   description: 'Modelos de IA (regresión, clustering y visión) para el Comedor Universitario UAGRM.',
   authors: [{ name: 'Grupo #25 · UAGRM' }],
   robots: { index: false, follow: false },
+  manifest: '/manifest.webmanifest',
+  icons: { icon: '/iconos/icono-192.png', apple: '/iconos/icono-192.png' },
 };
+
+export const viewport: Viewport = { themeColor: '#f97316' };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   const h = headers();          // x-user / x-roles los pone middleware.ts a partir del token
@@ -29,6 +34,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body className="bg-slate-900 text-slate-100 min-h-screen">
         <SSOReceiver />
+        <RegistrarPwa />
         <EmbedShell user={user} roles={roles}>{children}</EmbedShell>
       </body>
     </html>
