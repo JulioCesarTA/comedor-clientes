@@ -65,3 +65,6 @@ deploy/ec2/realm/
 
 # Compilación de TypeScript (se genera sola)
 *.tsbuildinfo
+
+# caché de compilación de Angular
+.angular/
