@@ -1,8 +1,16 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Ubicación para marcar la asistencia del personal: solo mientras se usa la app, nunca en segundo plano. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Android 13 exige pedir permiso para mostrar notificaciones -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <application
         android:label="comedor_movil"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+        <meta-data android:name="com.google.firebase.messaging.default_notification_icon" android:resource="@drawable/ic_stat_aviso"/>
+        <meta-data android:name="com.google.firebase.messaging.default_notification_channel_id" android:value="avisos_comedor"/>
         <activity
             android:name=".MainActivity"
             android:exported="true"

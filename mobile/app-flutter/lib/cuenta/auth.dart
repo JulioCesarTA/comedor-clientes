@@ -66,8 +66,8 @@ Perfil perfilDeToken(String token) {
       .where((r) => !r.startsWith('default-') && !r.startsWith('offline') && !r.startsWith('uma'))
       .toList();
   // el rol que manda primero, para que la app sepa qué mostrar
-  crudos.sort((a, b) => (_prioridad.indexOf(a) < 0 ? 99 : _prioridad.indexOf(a))
-      .compareTo(_prioridad.indexOf(b) < 0 ? 99 : _prioridad.indexOf(b)));
+  int rango(String r) => _prioridad.contains(r) ? _prioridad.indexOf(r) : 99;
+  crudos.sort((a, b) => rango(a).compareTo(rango(b)));
   return Perfil(
     usuario: p['preferred_username'] ?? '',
     nombre: p['name'] ?? p['preferred_username'] ?? '',

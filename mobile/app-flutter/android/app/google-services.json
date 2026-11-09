@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "117947839958",
+    "project_id": "sw2p2-35344",
+    "storage_bucket": "sw2p2-35344.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:117947839958:android:1d08cdb51a48597b1ea077",
+        "android_client_info": {
+          "package_name": "edu.uagrm.comedor_movil"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC7g5smQFaD-xmNi63Y-ZsXNXJai1Ho8mM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

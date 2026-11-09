@@ -2,8 +2,8 @@
 import 'dart:convert';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
-const _opciones = AndroidOptions(encryptedSharedPreferences: true);
-const _s = FlutterSecureStorage(aOptions: _opciones);
+// En Android los datos van al Keystore (AES-GCM con clave envuelta en RSA): es el modo por omisión de la versión 11.
+const _s = FlutterSecureStorage(aOptions: AndroidOptions());
 
 const _claves = {
   'perfil': 'perfil',
