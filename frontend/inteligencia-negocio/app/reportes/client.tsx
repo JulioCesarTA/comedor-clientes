@@ -1,13 +1,13 @@
 'use client';
-// Reportes por texto o por voz. El pedido en español se manda al backend (POST /reportes/consulta), que lo interpreta,
-// lo ejecuta contra los datos de tu rol y devuelve tabla, gráfico y resumen. Aquí solo se pinta y se exporta.
-// El motor es el MISMO para el portal, este panel y la app móvil: vive una sola vez, en ia-ml-service.
+// Reportes por texto o por voz, con IA LOCAL: el pedido en español lo interpreta y lo ejecuta este mismo navegador
+// (lib/reportes/local.ts) contra una copia de los datos de tu rol que se guarda en el equipo. Por eso funciona SIN
+// internet. El motor es el mismo que el del servidor y el del teléfono (la paridad se comprueba con un test).
 import { useEffect, useRef, useState } from 'react';
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Card } from '../components/Charts';
-import { API } from '../lib/vivo';
 import { aCsv, aHtml, aXlsxBase64, dmyIso, fmtValor, nombreArchivo } from '../lib/reportes/exportar';
-import { guardar, leerGuardado, token } from '../lib/reportes/datos';
+import { guardar, leerGuardado } from '../lib/reportes/datos';
+import { ayuda as ayudaLocal, consultar, ejecutarSpec, preparar } from '../lib/reportes/local';
 import { crearDictado, vozDisponible, Dictado } from '../lib/reportes/voz';
 
 const FORMATOS: [string, string][] = [['pantalla', 'Pantalla'], ['pdf', 'PDF'], ['excel', 'Excel'], ['csv', 'CSV']];
@@ -53,18 +53,6 @@ async function exportar(res: Reporte, formato: string) {
     f.srcdoc = aHtml(res);
     f.onload = () => { f.contentWindow?.focus(); f.contentWindow?.print(); setTimeout(() => f.remove(), 60000); };
   }
-}
-
-async function pedir(ruta: string, cuerpo: any) {
-  const t = token();
-  const r = await fetch(`${API}/reportes/${ruta}`, {
-    method: 'POST', cache: 'no-store',
-    headers: { 'content-type': 'application/json', ...(t ? { Authorization: `Bearer ${t}` } : {}) },
-    body: JSON.stringify(cuerpo),
-  });
-  const j = await r.json().catch(() => null);
-  if (!r.ok) throw new Error(j?.detail || `El servidor respondió ${r.status}`);
-  return j as Reporte;
 }
 
 function Grafica({ res }: { res: Reporte }) {
@@ -132,16 +120,32 @@ export function ReportesIA() {
   const [ayuda, setAyuda] = useState<DatasetAyuda[]>([]);
   const [hayVoz, setHayVoz] = useState(false);
   const [sinConexion, setSinConexion] = useState(false);
+  const [copia, setCopia] = useState('');            // «datos del 08/11 09:30»
+  const [bajando, setBajando] = useState(false);
   const dictado = useRef<Dictado | null>(null);
   const generarRef = useRef<(t: string) => void>(() => {});
 
   useEffect(() => {
     setHayVoz(vozDisponible());
     leerGuardado<string[]>('historial').then(h => h && setHistorial(h));
-    leerGuardado<Reporte>('ultimo').then(r => r && setRes(r));            // lo último visto, por si el servidor no responde
-    fetch(`${API}/reportes/catalogo`, { cache: 'no-store', headers: token() ? { Authorization: `Bearer ${token()}` } : {} })
-      .then(r => r.json()).then(j => setAyuda(j.datasets || [])).catch(() => {});
+    leerGuardado<Reporte>('ultimo').then(r => r && setRes(r));            // lo último visto
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});   // para abrir la pantalla sin internet
+    const estado = () => setSinConexion(!navigator.onLine);
+    estado();
+    const alVolver = () => { estado(); iniciar(false); };                // al volver internet se refrescan los datos
+    window.addEventListener('online', alVolver); window.addEventListener('offline', estado);
+    iniciar(false);
+    return () => { window.removeEventListener('online', alVolver); window.removeEventListener('offline', estado); };
   }, []);
+
+  const iniciar = async (forzar: boolean) => {
+    setBajando(true);
+    const { snap, aviso: a } = await preparar(forzar);
+    setBajando(false);
+    if (snap) { setAyuda(ayudaLocal() as any); setCopia(snap.generado); setError(''); }
+    else if (a) setError(a);
+    if (forzar && a && snap) setError(a);
+  };
 
   const recordar = (t: string) => { const h = [t, ...historial.filter(x => x !== t)].slice(0, 8); setHistorial(h); guardar('historial', h); };
 
@@ -155,25 +159,22 @@ export function ReportesIA() {
     const q = (t === undefined ? texto : t).trim();
     if (!q) return;
     setError(''); setAviso(''); setCargando(true);
-    pedir('consulta', { texto: q, previa: opc.continuar === false ? null : res?.spec })
-      .then(async r => {
-        setRes(r); setSinConexion(false); guardar('ultimo', r); recordar(q);
-        const f = opc.fmt || (r.spec?.salida && r.spec.salida !== 'pantalla' ? r.spec.salida : formato);
-        setFormato(f);
-        if (f !== 'pantalla') await bajar(r, f);
-      })
-      .catch(e => { setError(e.message || String(e)); setSinConexion(!navigator.onLine); })
-      .finally(() => setCargando(false));
+    try {
+      const r = consultar(q, opc.continuar === false ? null : res?.spec) as Reporte;      // se calcula aquí, sin red
+      setRes(r); guardar('ultimo', r); recordar(q);
+      const f = opc.fmt || (r.spec?.salida && r.spec.salida !== 'pantalla' ? r.spec.salida : formato);
+      setFormato(f);
+      if (f !== 'pantalla') bajar(r, f);
+    } catch (e: any) { setError(e.message || String(e)); }
+    finally { setCargando(false); }
   };
   generarRef.current = (t: string) => generar(t);
 
-  // Los ajustes rápidos reejecutan la misma consulta en el servidor, con el spec cambiado
+  // Los ajustes rápidos reejecutan la misma consulta (también en este navegador) con el spec cambiado
   const aplicar = (nuevo: any) => {
-    setCargando(true); setError('');
-    pedir('ejecutar', { spec: nuevo })
-      .then(r => { setRes({ ...r, entendi: res?.entendi || '' }); guardar('ultimo', r); })
-      .catch(e => setError(e.message || String(e)))
-      .finally(() => setCargando(false));
+    setError('');
+    try { const r = ejecutarSpec(nuevo) as Reporte; setRes({ ...r, entendi: res?.entendi || r.entendi }); guardar('ultimo', r); }
+    catch (e: any) { setError(e.message || String(e)); }
   };
 
   const alternarMic = () => {
@@ -199,9 +200,15 @@ export function ReportesIA() {
     <div className="px-8 pb-10 space-y-6 max-w-5xl">
       <div className="flex flex-wrap items-center gap-3 text-xs">
         <span className={'px-2.5 py-1 rounded border font-medium ' + (sinConexion ? 'bg-amber-500/10 border-amber-500/40 text-amber-400' : 'bg-emerald-500/10 border-emerald-500/40 text-emerald-400')}>
-          {sinConexion ? 'Sin conexión · se muestra el último reporte' : 'Conectado al servidor'}
+          {sinConexion ? 'Sin internet · los reportes siguen funcionando' : 'En línea'}
         </span>
-        <span className="text-slate-500">El pedido lo interpreta el servidor y solo consulta los datos que tu rol permite.</span>
+        <span className="px-2.5 py-1 rounded border border-slate-700 text-slate-300">
+          {copia ? `IA local · datos del ${copia}` : bajando ? 'Descargando datos…' : 'Sin datos descargados'}
+        </span>
+        <button disabled={bajando || sinConexion} onClick={() => iniciar(true)} className="px-2.5 py-1 rounded border border-slate-700 text-slate-200 hover:border-orange-500 disabled:opacity-40">
+          {bajando ? 'Actualizando…' : '↻ Actualizar datos'}
+        </button>
+        <span className="text-slate-500">El pedido se interpreta y se calcula en este equipo con los datos que tu rol permite.</span>
       </div>
 
       <Card title="Pide tu reporte" subtitle="Escríbelo o dilo con el micrófono, en español normal">

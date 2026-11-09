@@ -1,5 +1,6 @@
-// Dictado por voz en el navegador (Web Speech API). Chrome y Edge lo procesan en la nube, por eso necesita internet:
-// sin conexión el botón avisa y se puede escribir el pedido (el reporte en sí sí se genera sin internet).
+// Dictado por voz en el navegador (Web Speech API). Por omisión Chrome y Edge lo procesan en la nube (necesita internet).
+// Sin conexión se pide el reconocimiento DEL EQUIPO (`processLocally`, Chrome reciente con el paquete de español instalado);
+// si el navegador no lo ofrece, se avisa y se escribe el pedido. El reporte en sí siempre se genera sin internet.
 const SR = (): any => (typeof window === 'undefined' ? null : (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
 
 export const vozDisponible = () => !!SR();
@@ -10,7 +11,7 @@ export function mensajeErrorVoz(error: string): string {
     case 'no-speech': return 'No se escuchó nada. Habla cerca del micrófono e inténtalo otra vez.';
     case 'audio-capture': return 'No pude usar el micrófono.';
     case 'network': return 'El dictado del navegador necesita internet. Sin conexión, escribe tu pedido.';
-    case 'language-not-supported': return 'Este navegador no reconoce español para dictar.';
+    case 'language-not-supported': return 'Sin internet este navegador no tiene el paquete de voz en español instalado. Escribe tu pedido.';
     case 'aborted': return '';
     default: return 'No pude entender el audio.';
   }
@@ -32,5 +33,14 @@ export function crearDictado(cb: { onTexto: (t: string, final: boolean) => void;
   };
   rec.onerror = (ev: any) => { const m = mensajeErrorVoz(ev.error); if (m) cb.onError(m); };
   rec.onend = () => cb.onFin();
-  return { iniciar: () => rec.start(), detener: () => rec.stop() };
+  return {
+    iniciar: () => {
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        if (!('processLocally' in rec)) { cb.onError('Este navegador dicta usando internet. Sin conexión, escribe tu pedido (el reporte sí funciona).'); cb.onFin(); return; }
+        rec.processLocally = true;                                  // reconocimiento en el equipo
+      }
+      rec.start();
+    },
+    detener: () => rec.stop(),
+  };
 }

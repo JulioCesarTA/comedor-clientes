@@ -3,7 +3,7 @@
 // Valida que exista un JWT Keycloak antes de dejar pasar a las rutas protegidas.
 import { NextRequest, NextResponse } from 'next/server';
 
-const PUBLIC = ['/login', '/_next', '/favicon', '/api/health'];
+const PUBLIC = ['/login', '/_next', '/favicon', '/api/health', '/sw.js'];
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
@@ -44,5 +44,5 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|login|api/health).*)'],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|sw.js|login|api/health).*)'],
 };
