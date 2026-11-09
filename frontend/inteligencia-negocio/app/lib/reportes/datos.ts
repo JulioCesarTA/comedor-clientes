@@ -1,5 +1,5 @@
 // Memoria del navegador para la pantalla de reportes: lo último consultado y las búsquedas recientes.
-// Los datos del comedor NO se guardan aquí: el reporte lo calcula el backend y solo se recuerda el resultado mostrado.
+// La copia de datos para trabajar sin internet también se guarda aquí (ver local.ts).
 const DB = 'bi-reportes';
 const STORE = 'kv';
 

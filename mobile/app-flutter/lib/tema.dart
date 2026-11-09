@@ -17,10 +17,6 @@ class C {
   static const ambar = Color(0xFFF59E0B);
 }
 
-const paleta = [
-  Color(0xFFF97316), Color(0xFF06B6D4), Color(0xFF8B5CF6),
-  Color(0xFF10B981), Color(0xFFEF4444), Color(0xFFEAB308),
-];
 
 ThemeData temaComedor() {
   final base = ThemeData.dark(useMaterial3: true);

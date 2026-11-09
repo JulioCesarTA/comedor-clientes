@@ -1,18 +1,7 @@
-// Exportación del resultado de un reporte a CSV, PDF (vía HTML) y Excel, en el navegador.
-// El reporte ya viene calculado del backend (POST /reportes/consulta): aquí solo se le da formato de archivo.
-
-/** «2026-11-08 14:30» -> «08/11/2026 14:30»; si no es una fecha, el texto tal cual. */
-const dmyIso = (s) => { const m = /^(\d{4})-(\d{2})-(\d{2})(?: (\d{2}:\d{2}))?/.exec(String(s)); return m ? `${m[3]}/${m[2]}/${m[1]}${m[4] ? ' ' + m[4] : ''}` : String(s); };
-
-/** Mismo formato de números que muestra la pantalla (es-BO). */
-function fmtValor(v, fmt) {
-  if (v === null || v === undefined) return '—';
-  const n = (x, d) => x.toLocaleString('es-BO', { minimumFractionDigits: d, maximumFractionDigits: d });
-  if (fmt === 'moneda') return `Bs ${n(v, 2)}`;
-  if (fmt === 'porcentaje') return `${n(v, 1)}%`;
-  if (typeof v === 'number') return Number.isInteger(v) ? v.toLocaleString('es-BO') : n(v, 2);
-  return String(v);
-}
+// Exportación del resultado de un reporte a PDF (vía HTML) y Excel, en el navegador.
+// El reporte ya viene calculado por la IA local (motor.js): aquí solo se le da formato de archivo.
+const { fmtValor } = require('./motor');
+const { dmyIso } = require('./fechas');
 
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const PALETA = ['#f97316', '#06b6d4', '#8b5cf6', '#10b981', '#ef4444', '#eab308'];
@@ -30,15 +19,6 @@ const texto = (v, c) => {
   if (typeof v === 'number') return fmtValor(v, c.fmt);
   return dmyIso(v);
 };
-
-// ----------------------------- CSV -----------------------------
-
-function aCsv(res) {
-  const celda = (v) => { const s = v === null || v === undefined ? '' : typeof v === 'string' ? dmyIso(v) : String(v); return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-  const lineas = [res.columnas.map((c) => celda(c.label)).join(';')];
-  for (const f of res.filas) lineas.push(res.columnas.map((c) => celda(f[c.key])).join(';'));
-  return '﻿' + lineas.join('\r\n');
-}
 
 // ----------------------------- gráfico (SVG) -----------------------------
 
@@ -110,7 +90,7 @@ ${res.condiciones.length ? `<div class="sub">Condiciones: ${esc(res.condiciones.
 <ul class="res">${res.resumen.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>
 ${svgGrafico(res)}
 ${res.filas.length ? `<table><thead><tr>${cab}</tr></thead><tbody>${filas}${total}</tbody></table>` : '<p>No hay datos que cumplan estas condiciones.</p>'}
-<div class="pie">Reporte generado en el teléfono, sin conexión · ${esc(res.titulo)}</div>
+<div class="pie">Comedor Universitario UAGRM · ${esc(res.titulo)}</div>
 </body></html>`;
 }
 
@@ -150,4 +130,4 @@ function aXlsxBase64(res, XLSX) {
   return XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
 }
 
-module.exports = { aCsv, aHtml, aXlsxBase64, svgGrafico, nombreArchivo, fmtValor, dmyIso };
+module.exports = { aHtml, aXlsxBase64, nombreArchivo, fmtValor, dmyIso };

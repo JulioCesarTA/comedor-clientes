@@ -5,7 +5,7 @@
 // Entiende: qué datos, qué columnas ver, filtros ("mayores a 5", "turno almuerzo", "sin beca"), fechas ("noviembre",
 // "del 1 al 15 de octubre", "últimos 30 días", "2025", "primer trimestre"), agrupaciones ("por mes", "por turno"),
 // medidas ("total", "promedio", "cuántos"), rankings ("los 10 mayores"), orden ("ascendente") y la salida ("en PDF",
-// "Excel", "CSV"). Sigue la conversación ("ahora por mes", "solo de almuerzo") y corrige errores de tipeo.
+// "Excel"). Sigue la conversación ("ahora por mes", "solo de almuerzo") y corrige errores de tipeo.
 import 'dart:convert';
 import 'dart:math' as m;
 
@@ -43,7 +43,6 @@ const _colNum = {'pagos': 'monto', 'estudiantes': 'reservas', 'becas': 'uso', 'm
 final _formatos = <(String, RegExp)>[
   ('pdf', RegExp(r'\bpdf\b')),
   ('excel', RegExp(r'\b(excel|xlsx|xls|hoja de calculo|planilla|spreadsheet)\b')),
-  ('csv', RegExp(r'\bcsv\b')),
   ('pantalla', RegExp(r'\b(en pantalla|por pantalla|en la pantalla|aqui)\b')),
 ];
 const _sinPalabra = {'media': 'beca'}; // valores ambiguos: solo cuentan junto a esta palabra
@@ -875,7 +874,7 @@ String entendido(Map spec) {
   }
   final cond = mo.describir(spec);
   if (cond.isNotEmpty) partes.add('(${cond.join('; ')})');
-  const salidas = {'pantalla': 'en pantalla', 'pdf': 'en PDF', 'excel': 'en Excel', 'csv': 'en CSV'};
+  const salidas = {'pantalla': 'en pantalla', 'pdf': 'en PDF', 'excel': 'en Excel'};
   final salida = salidas[(spec['salida'] as String?) ?? 'pantalla'] ?? 'en pantalla';
   return '${partes.join(' ')}, $salida.';
 }

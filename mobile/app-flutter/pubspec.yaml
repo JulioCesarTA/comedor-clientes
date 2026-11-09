@@ -9,7 +9,6 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  cupertino_icons: ^1.0.8
 
   http: ^1.6.0                    # llamadas al gateway y a Keycloak
   flutter_secure_storage: ^11.2.0 # perfil, token de refresco y clave local (Keystore)
@@ -19,15 +18,11 @@ dependencies:
   image_picker: ^1.2.4            # cámara y galería
   image: ^4.12.0                  # redimensionar y leer píxeles en Dart puro
   tflite_flutter: ^0.12.1         # TensorFlow Lite: la CNN corre en el teléfono
-  fl_chart: ^1.3.0                # gráficos de los reportes
-  pdf: ^3.13.1                    # reportes y facturas en PDF
-  printing: ^5.15.1               # compartir/guardar el PDF
+  pdf: ^3.13.1                    # reportes en PDF
   archive: ^4.0.7                 # el .xlsx se arma a mano (zip + xml): evita el choque de dependencias con pdf
-  share_plus: ^13.3.1             # compartir CSV y Excel
   firebase_core: ^5.1.0            # conexión con el proyecto de Firebase
   firebase_messaging: ^17.0.1      # notificaciones push (FCM)
   geolocator: ^14.0.1               # ubicación para marcar la asistencia del personal
-  intl: ^0.20.3
   crypto: ^3.0.6                  # hash de la contraseña guardada para entrar sin internet
 
 dev_dependencies:

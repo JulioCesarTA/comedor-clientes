@@ -30,18 +30,11 @@ export function KPI({ label, value, delta, color = 'purple' }: any) {
   );
 }
 
-export function PageHeader({ title, subtitle, tags = [] }: { title: string, subtitle?: string, tags?: string[] }) {
+export function PageHeader({ title, subtitle }: { title: string, subtitle?: string }) {
   return (
     <header className="sticky top-0 z-10 bg-slate-900/80 backdrop-blur border-b border-slate-800 px-8 py-4 mb-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold text-white">{title}</h1>
-          {subtitle && <p className="text-xs text-slate-400 mt-0.5">{subtitle}</p>}
-        </div>
-        <div className="flex gap-2">
-          {tags.map(t => <span key={t} className="px-2 py-1 bg-slate-800 border border-slate-700 text-xs text-cyan-400 font-mono rounded">{t}</span>)}
-        </div>
-      </div>
+      <h1 className="text-xl font-bold text-white">{title}</h1>
+      {subtitle && <p className="text-xs text-slate-400 mt-0.5">{subtitle}</p>}
     </header>
   );
 }

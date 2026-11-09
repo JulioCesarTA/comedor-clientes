@@ -10,7 +10,7 @@ import * as lenguaje from './lenguaje';
 // @ts-ignore
 import * as motor from './motor';
 
-export type Snapshot = {
+type Snapshot = {
   generado: string;                 // cuándo el servidor armó la copia (hora del servidor)
   guardadoEn: number;               // cuándo se guardó en este navegador (ms)
   usuario: string;                  // de quién es: si entra otra persona en este navegador, no se reutiliza
@@ -22,7 +22,7 @@ export type Snapshot = {
 const VIGENCIA_MS = 15 * 60 * 1000;     // pasado este tiempo, si hay internet se baja una copia nueva al abrir
 let actual: Snapshot | null = null;
 
-export function usuarioActual(): string {
+function usuarioActual(): string {
   try { return JSON.parse(atob(token().split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).preferred_username || ''; } catch { return ''; }
 }
 
@@ -32,7 +32,7 @@ function usar(s: Snapshot) {
 }
 
 /** Copia guardada en este navegador (sin tocar la red). null si no hay o es de otra persona. */
-export async function copiaGuardada(): Promise<Snapshot | null> {
+async function copiaGuardada(): Promise<Snapshot | null> {
   const s = await leerGuardado<Snapshot>('snapshot');
   if (!s || s.usuario !== usuarioActual()) return null;
   usar(s);
@@ -40,7 +40,7 @@ export async function copiaGuardada(): Promise<Snapshot | null> {
 }
 
 /** Baja una copia nueva de los datos de tu rol. Lanza si no hay internet o el servidor falla. */
-export async function actualizar(): Promise<Snapshot> {
+async function actualizar(): Promise<Snapshot> {
   const t = token();
   const r = await fetch(`${API}/reportes/snapshot`, { cache: 'no-store', headers: t ? { Authorization: `Bearer ${t}` } : {} });
   if (r.status === 401 || r.status === 403) throw new Error('Tu sesión venció: vuelve a ingresar para actualizar los datos.');
@@ -66,7 +66,6 @@ export async function preparar(forzar = false): Promise<{ snap: Snapshot | null;
   }
 }
 
-export function snapshotActual(): Snapshot | null { return actual; }
 
 /** Interpreta un pedido en español y lo ejecuta con los datos locales. */
 export function consultar(texto: string, previa: any) {
@@ -91,5 +90,3 @@ export function ayuda() {
   }));
 }
 
-/** Para el cambio de usuario: borra la copia (datos de un rol no deben quedar para otro). */
-export async function olvidar() { actual = null; await guardar('snapshot', null); }

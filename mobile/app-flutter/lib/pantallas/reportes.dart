@@ -1,9 +1,6 @@
 // Reportes por texto o por voz, con IA LOCAL: el pedido en español lo interpreta y lo ejecuta este mismo teléfono
 // (lib/reportes/) contra una copia de los datos de tu rol guardada en el equipo. Por eso funciona SIN internet.
-// Con red, la copia se renueva sola; aquí se pinta la tabla y el gráfico y se exporta a PDF, Excel o CSV.
-import 'dart:convert';
-
-import 'package:fl_chart/fl_chart.dart';
+// Con red, la copia se renueva sola; aquí se muestra la tabla y se descarga en PDF o Excel.
 import 'package:flutter/material.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 
@@ -138,10 +135,10 @@ class _ReportesState extends State<Reportes> {
 
   Future<void> _exportar(String formato) async {
     if (_res == null) return;
-    setState(() => _aviso = 'Generando ${formato == 'excel' ? 'Excel' : formato.toUpperCase()}…');
+    setState(() => _aviso = 'Generando ${formato == 'excel' ? 'Excel' : 'PDF'}…');
     try {
-      await compartirReporte(_res!, formato);
-      if (mounted) setState(() => _aviso = 'Listo: elige dónde guardarlo o con quién compartirlo.');
+      final donde = await descargarReporte(_res!, formato);
+      if (mounted) setState(() => _aviso = 'Descargado en $donde');
     } catch (e) {
       if (mounted) setState(() { _aviso = ''; _error = 'No pude generar el archivo: $e'; });
     }
@@ -256,7 +253,7 @@ class _ReportesState extends State<Reportes> {
                     style: TextStyle(color: C.tenue, fontSize: 11.5))),
           const Etiqueta('Ver en', arriba: 14),
           Wrap(spacing: 8, runSpacing: 8, children: [
-            for (final f in const [['pantalla', 'Pantalla'], ['pdf', 'PDF'], ['excel', 'Excel'], ['csv', 'CSV']])
+            for (final f in const [['pantalla', 'Pantalla'], ['pdf', 'PDF'], ['excel', 'Excel']])
               ChipSel(texto: f[1], activo: _formato == f[0], onTap: () => setState(() => _formato = f[0])),
           ]),
           const SizedBox(height: 12),
@@ -312,14 +309,13 @@ class _ReportesState extends State<Reportes> {
               Padding(padding: const EdgeInsets.only(bottom: 2), child: Text(l, style: const TextStyle(color: C.texto, fontSize: 13))),
             const SizedBox(height: 12),
             Row(children: [
-              for (final f in const [['pdf', 'PDF'], ['excel', 'Excel'], ['csv', 'CSV']])
+              for (final f in const [['pdf', 'PDF'], ['excel', 'Excel']])
                 Expanded(child: Padding(
-                  padding: EdgeInsets.only(right: f[0] == 'csv' ? 0 : 8),
+                  padding: EdgeInsets.only(right: f[0] == 'excel' ? 0 : 8),
                   child: OutlinedButton(onPressed: () => _exportar(f[0]), child: Text('⬇ ${f[1]}')),
                 )),
             ]),
             const SizedBox(height: 12),
-            _Grafico(res: res),
             _Tabla(res: res),
           ]),
         ],
@@ -356,81 +352,6 @@ class _ReportesState extends State<Reportes> {
   }
 }
 
-class _Grafico extends StatelessWidget {
-  const _Grafico({required this.res});
-  final Map<String, dynamic> res;
-
-  @override
-  Widget build(BuildContext context) {
-    final g = res['grafico'];
-    final filas = List<Map<String, dynamic>>.from((res['filas'] as List).map((f) => Map<String, dynamic>.from(f)));
-    if (g == null || filas.isEmpty || filas.length > 24) return const SizedBox.shrink();
-    final ys = List<String>.from(g['y']);
-    final x = g['x'] as String;
-    double v(Map<String, dynamic> f, String k) => (f[k] as num?)?.toDouble() ?? 0;
-    final etiquetas = filas.map((f) => '${f[x] ?? ''}').toList();
-
-    if (g['tipo'] == 'torta') {
-      final total = filas.fold<double>(0, (s, f) => s + v(f, ys.first));
-      return SizedBox(height: 220, child: PieChart(PieChartData(
-        sections: [
-          for (var i = 0; i < filas.length; i++)
-            PieChartSectionData(
-              value: v(filas[i], ys.first), color: paleta[(i + 2) % paleta.length], radius: 70,
-              title: total > 0 ? '${(v(filas[i], ys.first) / total * 100).round()}%' : '',
-              titleStyle: const TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.bold),
-            ),
-        ],
-        sectionsSpace: 2, centerSpaceRadius: 28,
-      )));
-    }
-
-    final titulos = AxisTitles(sideTitles: SideTitles(
-      showTitles: true, reservedSize: 42, interval: (filas.length / 6).ceilToDouble().clamp(1, 99),
-      getTitlesWidget: (valor, _) {
-        final i = valor.round();
-        if (i < 0 || i >= etiquetas.length) return const SizedBox.shrink();
-        final e = etiquetas[i];
-        return Padding(padding: const EdgeInsets.only(top: 6),
-            child: Text(e.length > 7 ? e.substring(0, 7) : e, style: const TextStyle(color: C.tenue, fontSize: 9)));
-      },
-    ));
-    final izq = AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 44,
-        getTitlesWidget: (v, _) => Text(v >= 1000 ? '${(v / 1000).toStringAsFixed(0)}k' : v.toStringAsFixed(0),
-            style: const TextStyle(color: C.tenue, fontSize: 9))));
-
-    if (g['tipo'] == 'lineas') {
-      return SizedBox(height: 220, child: LineChart(LineChartData(
-        lineBarsData: [
-          for (var s = 0; s < ys.length; s++)
-            LineChartBarData(
-              spots: [for (var i = 0; i < filas.length; i++) FlSpot(i.toDouble(), v(filas[i], ys[s]))],
-              color: paleta[s % 2], barWidth: 2.5, isCurved: true,
-              dotData: FlDotData(show: filas.length <= 12),
-            ),
-        ],
-        titlesData: FlTitlesData(bottomTitles: titulos, leftTitles: izq,
-            topTitles: const AxisTitles(), rightTitles: const AxisTitles()),
-        gridData: const FlGridData(show: true, drawVerticalLine: false),
-        borderData: FlBorderData(show: false),
-      )));
-    }
-    return SizedBox(height: 220, child: BarChart(BarChartData(
-      barGroups: [
-        for (var i = 0; i < filas.length; i++)
-          BarChartGroupData(x: i, barRods: [
-            for (var s = 0; s < ys.length; s++)
-              BarChartRodData(toY: v(filas[i], ys[s]), color: paleta[s % 2], width: 10, borderRadius: BorderRadius.circular(2)),
-          ]),
-      ],
-      titlesData: FlTitlesData(bottomTitles: titulos, leftTitles: izq,
-          topTitles: const AxisTitles(), rightTitles: const AxisTitles()),
-      gridData: const FlGridData(show: true, drawVerticalLine: false),
-      borderData: FlBorderData(show: false),
-    )));
-  }
-}
-
 class _Tabla extends StatelessWidget {
   const _Tabla({required this.res});
   final Map<String, dynamic> res;
@@ -459,11 +380,9 @@ class _Tabla extends StatelessWidget {
       ),
       if (filas.length > mostrar.length)
         Padding(padding: const EdgeInsets.only(top: 6),
-            child: Text('Se muestran ${mostrar.length} de ${filas.length} filas; el PDF, Excel y CSV las traen todas.',
+            child: Text('Se muestran ${mostrar.length} de ${filas.length} filas; el PDF y el Excel las traen todas.',
                 style: const TextStyle(color: C.tenue, fontSize: 11))),
     ]);
   }
 }
 
-/// Deja el JSON del servidor listo para guardarlo (lo usa la caché del último reporte).
-String aJson(Object o) => jsonEncode(o);

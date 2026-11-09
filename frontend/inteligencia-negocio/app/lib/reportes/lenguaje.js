@@ -5,7 +5,7 @@
 // ("mayores a 5", "turno almuerzo", "sin beca"), fechas ("noviembre", "del 1 al 15 de octubre", "últimos 30 días", "2025",
 // "primer trimestre"), agrupaciones ("por mes", "por turno"), medidas ("total", "promedio", "cuántos"), rankings
 // ("los 10 mayores", "los 5 más pedidos"), orden ("ascendente", "de mayor a menor") y la salida ("en pantalla", "PDF",
-// "Excel", "CSV"). También sigue la conversación ("ahora por mes", "solo de almuerzo") y corrige errores de tipeo.
+// "Excel"). También sigue la conversación ("ahora por mes", "solo de almuerzo") y corrige errores de tipeo.
 const { DATASETS, columna, versionCatalogo } = require('./catalogo');
 const F = require('./fechas');
 const M = require('./motor');
@@ -21,7 +21,7 @@ const TIEMPO = { dia: 'dia', dias: 'dia', diario: 'dia', diaria: 'dia', diariame
   mes: 'mes', meses: 'mes', mensual: 'mes', mensualmente: 'mes', trimestre: 'trimestre', trimestres: 'trimestre', trimestral: 'trimestre', anio: 'anio', anios: 'anio',
   ano: 'anio', anos: 'anio', anual: 'anio', anualmente: 'anio', 'dia de la semana': 'dia_semana', 'dias de la semana': 'dia_semana' };
 const COL_NUM = { pagos: 'monto', estudiantes: 'reservas', becas: 'uso', menus: 'apartadas', insumos: 'stock', desperdicio: 'restante', reservas: null };
-const FORMATOS = [['pdf', /\bpdf\b/], ['excel', /\b(excel|xlsx|xls|hoja de calculo|planilla|spreadsheet)\b/], ['csv', /\bcsv\b/], ['pantalla', /\b(en pantalla|por pantalla|en la pantalla|aqui)\b/]];
+const FORMATOS = [['pdf', /\bpdf\b/], ['excel', /\b(excel|xlsx|xls|hoja de calculo|planilla|spreadsheet)\b/], ['pantalla', /\b(en pantalla|por pantalla|en la pantalla|aqui)\b/]];
 const SIN_PALABRA = { media: 'beca' };            // valores ambiguos: solo cuentan junto a esta palabra
 
 // ----------------------------- texto -----------------------------
@@ -617,8 +617,8 @@ function entendido(spec) {
   else if (spec.columnas) partes.push('con ' + spec.columnas.map((c) => columna(spec.dataset, c).etiqueta.toLowerCase()).join(', '));
   const cond = M.describir(spec);
   if (cond.length) partes.push('(' + cond.join('; ') + ')');
-  const salida = { pantalla: 'en pantalla', pdf: 'en PDF', excel: 'en Excel', csv: 'en CSV' }[spec.salida || 'pantalla'] || 'en pantalla';
+  const salida = { pantalla: 'en pantalla', pdf: 'en PDF', excel: 'en Excel' }[spec.salida || 'pantalla'] || 'en pantalla';
   return `${partes.join(' ')}, ${salida}.`;
 }
 
-module.exports = { interpretar, entendido, norm, parseFechas, corregirTipeos, NoEntendido, detectarDataset };
+module.exports = { interpretar, entendido };

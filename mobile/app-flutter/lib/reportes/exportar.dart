@@ -1,17 +1,12 @@
-// El reporte ya viene calculado del servidor: aquí solo se le da formato de archivo (PDF, Excel o CSV) y se comparte.
+// El reporte ya está calculado (IA local): aquí se le da formato de archivo (PDF o Excel) y se guarda en Descargas.
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:archive/archive.dart';
-import 'package:intl/intl.dart';
-import 'package:path_provider/path_provider.dart';
+import 'package:flutter/services.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:share_plus/share_plus.dart';
 
-final _n0 = NumberFormat('#,##0', 'es');
-final _n1 = NumberFormat('#,##0.0', 'es');
-final _n2 = NumberFormat('#,##0.00', 'es');
+import 'motor.dart' show fmtValor;
 
 /// «2026-11-08 14:30» -> «08/11/2026 14:30»; si no es fecha, el texto tal cual.
 String dmyIso(Object? s) {
@@ -20,16 +15,8 @@ String dmyIso(Object? s) {
   return m == null ? t : '${m[3]}/${m[2]}/${m[1]}${m[4] != null ? ' ${m[4]}' : ''}';
 }
 
-/// Mismo formato de números que muestra el servidor (es-BO).
-String celdaTexto(Object? v, Object? fmt) {
-  if (v == null) return '—';
-  if (v is num) {
-    if (fmt == 'moneda') return 'Bs ${_n2.format(v)}';
-    if (fmt == 'porcentaje') return '${_n1.format(v)}%';
-    return v == v.roundToDouble() ? _n0.format(v) : _n2.format(v);
-  }
-  return dmyIso(v);
-}
+/// Texto de una celda: números con el formato del motor (es-BO), fechas como dd/mm/aaaa.
+String celdaTexto(Object? v, Object? fmt) => v is num || v == null ? fmtValor(v, fmt) : dmyIso(v);
 
 String _nombreArchivo(String titulo, String ext) {
   final base = titulo.toLowerCase().replaceAll(RegExp(r'[^a-z0-9áéíóúñ ]'), '');
@@ -40,27 +27,7 @@ String _nombreArchivo(String titulo, String ext) {
   return '$corto-${d.year}${p(d.month)}${p(d.day)}-${p(d.hour)}${p(d.minute)}.$ext';
 }
 
-List<Map<String, dynamic>> _cols(Map<String, dynamic> res) =>
-    List<Map<String, dynamic>>.from((res['columnas'] as List).map((c) => Map<String, dynamic>.from(c)));
-
-List<Map<String, dynamic>> _filas(Map<String, dynamic> res) =>
-    List<Map<String, dynamic>>.from((res['filas'] as List).map((f) => Map<String, dynamic>.from(f)));
-
-// ----------------------------- CSV -----------------------------
-
-String aCsv(Map<String, dynamic> res) {
-  String celda(Object? v) {
-    final s = v == null ? '' : (v is String ? dmyIso(v) : '$v');
-    return RegExp(r'[;"\n]').hasMatch(s) ? '"${s.replaceAll('"', '""')}"' : s;
-  }
-
-  final cols = _cols(res);
-  final lineas = <String>[cols.map((c) => celda(c['label'])).join(';')];
-  for (final f in _filas(res)) {
-    lineas.add(cols.map((c) => celda(f[c['key']])).join(';'));
-  }
-  return '﻿${lineas.join('\r\n')}';     // BOM: Excel abre bien los acentos
-}
+List<Map<String, dynamic>> _lista(Object? l) => [for (final x in (l as List)) Map<String, dynamic>.from(x as Map)];
 
 // ----------------------------- Excel (.xlsx armado a mano: zip + xml) -----------------------------
 
@@ -76,21 +43,22 @@ String _letraCol(int n) {
 }
 
 List<int> aXlsx(Map<String, dynamic> res) {
-  final cols = _cols(res);
-  final filas = _filas(res);
+  final cols = _lista(res['columnas']);
+  final filas = _lista(res['filas']);
   final b = StringBuffer()
     ..write('<?xml version="1.0" encoding="UTF-8"?>'
         '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>');
 
-  void fila(int n, List<String> valores, {List<bool>? numero, bool negrita = false}) {
+  // Cada valor es una celda: los números van como número (Excel puede sumarlos), el resto como texto.
+  void fila(int n, List<Object?> valores, {bool negrita = false}) {
     b.write('<row r="$n">');
     for (var i = 0; i < valores.length; i++) {
+      final v = valores[i];
       final ref = '${_letraCol(i)}$n';
-      final esNum = numero != null && numero[i];
-      if (esNum) {
-        b.write('<c r="$ref" s="${negrita ? 1 : 0}"><v>${valores[i]}</v></c>');
+      if (v is num) {
+        b.write('<c r="$ref" s="${negrita ? 1 : 0}"><v>$v</v></c>');
       } else {
-        b.write('<c r="$ref" t="inlineStr" s="${negrita ? 1 : 0}"><is><t xml:space="preserve">${_esc(valores[i])}</t></is></c>');
+        b.write('<c r="$ref" t="inlineStr" s="${negrita ? 1 : 0}"><is><t xml:space="preserve">${_esc(v == null ? '' : dmyIso(v))}</t></is></c>');
       }
     }
     b.write('</row>');
@@ -101,26 +69,13 @@ List<int> aXlsx(Map<String, dynamic> res) {
   fila(n++, [List<String>.from(res['condiciones'] ?? []).join('; ')]);
   fila(n++, ['Generado el ${res['generado']} · ${filas.length} filas']);
   n++;
-  fila(n++, cols.map((c) => '${c['label']}').toList(), negrita: true);
+  fila(n++, [for (final c in cols) c['label']], negrita: true);
   for (final f in filas) {
-    final valores = <String>[], esNum = <bool>[];
-    for (final c in cols) {
-      final v = f[c['key']];
-      esNum.add(v is num);
-      valores.add(v is num ? '$v' : (v == null ? '' : dmyIso(v)));
-    }
-    fila(n++, valores, numero: esNum);
+    fila(n++, [for (final c in cols) f[c['key']]]);
   }
   final totales = res['totales'] as Map?;
   if (totales != null) {
-    final valores = <String>[], esNum = <bool>[];
-    for (var i = 0; i < cols.length; i++) {
-      final k = cols[i]['key'];
-      final v = i == 0 ? 'TOTAL' : totales[k];
-      esNum.add(v is num);
-      valores.add(v == null ? '' : '$v');
-    }
-    fila(n++, valores, numero: esNum, negrita: true);
+    fila(n++, [for (var i = 0; i < cols.length; i++) i == 0 ? 'TOTAL' : totales[cols[i]['key']]], negrita: true);
   }
   b.write('</sheetData></worksheet>');
 
@@ -162,12 +117,11 @@ List<int> aXlsx(Map<String, dynamic> res) {
 // ----------------------------- PDF -----------------------------
 
 Future<List<int>> aPdf(Map<String, dynamic> res) async {
-  final cols = _cols(res);
-  final filas = _filas(res);
+  final cols = _lista(res['columnas']);
+  final filas = _lista(res['filas']);
   final doc = pw.Document();
-  final apaisado = cols.length > 5;
   doc.addPage(pw.MultiPage(
-    pageFormat: apaisado ? PdfPageFormat.a4.landscape : PdfPageFormat.a4,
+    pageFormat: cols.length > 5 ? PdfPageFormat.a4.landscape : PdfPageFormat.a4,
     margin: const pw.EdgeInsets.all(28),
     build: (ctx) => [
       pw.Text('${res['titulo']}', style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
@@ -177,16 +131,14 @@ Future<List<int>> aPdf(Map<String, dynamic> res) async {
         pw.Text('Condiciones: ${List<String>.from(res['condiciones']).join('; ')}',
             style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey700)),
       pw.SizedBox(height: 8),
-      for (final l in List<String>.from(res['resumen'] ?? []))
-        pw.Bullet(text: l, style: const pw.TextStyle(fontSize: 10)),
+      for (final l in List<String>.from(res['resumen'] ?? [])) pw.Bullet(text: l, style: const pw.TextStyle(fontSize: 10)),
       pw.SizedBox(height: 10),
       pw.TableHelper.fromTextArray(
-        headers: cols.map((c) => '${c['label']}').toList(),
+        headers: [for (final c in cols) '${c['label']}'],
         data: [
           for (final f in filas) [for (final c in cols) celdaTexto(f[c['key']], c['fmt'])],
           if (res['totales'] != null)
-            [for (var i = 0; i < cols.length; i++)
-              i == 0 ? 'TOTAL' : celdaTexto((res['totales'] as Map)[cols[i]['key']], cols[i]['fmt'])],
+            [for (var i = 0; i < cols.length; i++) i == 0 ? 'TOTAL' : celdaTexto((res['totales'] as Map)[cols[i]['key']], cols[i]['fmt'])],
         ],
         headerStyle: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold, color: PdfColors.white),
         headerDecoration: const pw.BoxDecoration(color: PdfColors.blueGrey800),
@@ -199,21 +151,19 @@ Future<List<int>> aPdf(Map<String, dynamic> res) async {
   return doc.save();
 }
 
-// ----------------------------- compartir -----------------------------
+// ----------------------------- descargar -----------------------------
 
-/// Genera el archivo y abre el menú del teléfono para guardarlo o enviarlo.
-Future<void> compartirReporte(Map<String, dynamic> res, String formato) async {
-  final dir = await getTemporaryDirectory();
-  late final File f;
-  if (formato == 'csv') {
-    f = File('${dir.path}/${_nombreArchivo('${res['titulo']}', 'csv')}');
-    await f.writeAsString(aCsv(res));
-  } else if (formato == 'excel') {
-    f = File('${dir.path}/${_nombreArchivo('${res['titulo']}', 'xlsx')}');
-    await f.writeAsBytes(aXlsx(res));
-  } else {
-    f = File('${dir.path}/${_nombreArchivo('${res['titulo']}', 'pdf')}');
-    await f.writeAsBytes(await aPdf(res));
-  }
-  await SharePlus.instance.share(ShareParams(files: [XFile(f.path)], text: '${res['titulo']}'));
+const _sistema = MethodChannel('comedor/sistema');
+
+/// Genera el PDF o el Excel, lo guarda en «Descargas» del teléfono y lo abre. Devuelve dónde quedó.
+Future<String> descargarReporte(Map<String, dynamic> res, String formato) async {
+  final excel = formato == 'excel';
+  final bytes = excel ? aXlsx(res) : await aPdf(res);
+  final donde = await _sistema.invokeMethod<String>('guardarDescarga', {
+    'nombre': _nombreArchivo('${res['titulo']}', excel ? 'xlsx' : 'pdf'),
+    'mime': excel ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'application/pdf',
+    'bytes': Uint8List.fromList(bytes),
+  });
+  if (donde == null) throw Exception('el teléfono no dejó guardar el archivo');
+  return donde;
 }

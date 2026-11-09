@@ -5,12 +5,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Card } from '../components/Charts';
-import { aCsv, aHtml, aXlsxBase64, dmyIso, fmtValor, nombreArchivo } from '../lib/reportes/exportar';
+import { aHtml, aXlsxBase64, dmyIso, fmtValor, nombreArchivo } from '../lib/reportes/exportar';
 import { guardar, leerGuardado } from '../lib/reportes/datos';
 import { ayuda as ayudaLocal, consultar, ejecutarSpec, preparar } from '../lib/reportes/local';
 import { crearDictado, vozDisponible, Dictado } from '../lib/reportes/voz';
 
-const FORMATOS: [string, string][] = [['pantalla', 'Pantalla'], ['pdf', 'PDF'], ['excel', 'Excel'], ['csv', 'CSV']];
+const FORMATOS: [string, string][] = [['pantalla', 'Pantalla'], ['pdf', 'PDF'], ['excel', 'Excel']];
 const POR: [string, string][] = [['dia', 'Día'], ['semana', 'Semana'], ['mes', 'Mes'], ['anio', 'Año']];
 const PALETA = ['#f97316', '#06b6d4', '#8b5cf6', '#10b981', '#ef4444', '#eab308'];
 const MAX_FILAS_TABLA = 300;
@@ -38,7 +38,6 @@ function descargar(blob: Blob, nombre: string) {
 }
 
 async function exportar(res: Reporte, formato: string) {
-  if (formato === 'csv') return descargar(new Blob([aCsv(res)], { type: 'text/csv;charset=utf-8' }), nombreArchivo(res.titulo, 'csv'));
   if (formato === 'excel') {
     const XLSX: any = await import('xlsx');
     const b64 = aXlsxBase64(res, XLSX.default || XLSX);
@@ -103,7 +102,7 @@ function Tabla({ res }: { res: Reporte }) {
           )}
         </tbody>
       </table>
-      {res.filas.length > MAX_FILAS_TABLA && <div className="p-2 text-xs text-slate-400 bg-slate-900">Se muestran las primeras {MAX_FILAS_TABLA} de {res.filas.length.toLocaleString('es-BO')} filas; el PDF, Excel y CSV incluyen todas.</div>}
+      {res.filas.length > MAX_FILAS_TABLA && <div className="p-2 text-xs text-slate-400 bg-slate-900">Se muestran las primeras {MAX_FILAS_TABLA} de {res.filas.length.toLocaleString('es-BO')} filas; el PDF y el Excel incluyen todas.</div>}
     </div>
   );
 }
@@ -151,7 +150,7 @@ export function ReportesIA() {
 
   const bajar = async (r: Reporte, f: string) => {
     setAviso(`Generando ${f === 'excel' ? 'Excel' : f.toUpperCase()}…`);
-    try { await exportar(r, f); setAviso(f === 'pdf' ? 'Se abrió la impresión: elige «Guardar como PDF».' : `Listo: ${f === 'excel' ? 'Excel' : 'CSV'} descargado.`); }
+    try { await exportar(r, f); setAviso(f === 'pdf' ? 'Se abrió la impresión: elige «Guardar como PDF».' : 'Listo: Excel descargado.'); }
     catch (e: any) { setAviso(''); setError('No pude generar el archivo: ' + (e.message || e)); }
   };
 
@@ -276,7 +275,7 @@ export function ReportesIA() {
           <Card title={res.titulo} subtitle={`${res.datasetEtiqueta} · ${res.generado}`}>
             {res.resumen.map((l, i) => <p key={i} className="text-sm text-slate-300">{l}</p>)}
             <div className="flex gap-2 my-4">
-              {[['pdf', 'PDF'], ['excel', 'Excel'], ['csv', 'CSV']].map(([k, n]) => (
+              {[['pdf', 'PDF'], ['excel', 'Excel']].map(([k, n]) => (
                 <button key={k} onClick={() => bajar(res, k)} className="px-4 py-1.5 rounded-lg border border-slate-700 bg-slate-800 text-sm text-slate-100 hover:border-orange-500">⬇ {n}</button>
               ))}
             </div>
@@ -302,7 +301,7 @@ export function ReportesIA() {
             ))}
             <p className="text-slate-500 text-xs leading-relaxed">
               Puedes combinar períodos (noviembre, últimos 30 días, del 1 al 15 de octubre, 2025), filtros (mayores a 5, solo almuerzo, sin beca), agrupaciones (por día, semana, mes, año, turno, plato),
-              cálculos (total, promedio, cuántos), rankings (los 10 mayores), orden (ascendente, descendente) y formato (pantalla, PDF, Excel, CSV).
+              cálculos (total, promedio, cuántos), rankings (los 10 mayores), orden (ascendente, descendente) y formato (pantalla, PDF o Excel).
             </p>
           </Card>
         </>

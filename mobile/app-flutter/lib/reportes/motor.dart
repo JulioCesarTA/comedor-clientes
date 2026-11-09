@@ -347,29 +347,6 @@ String fmtValor(Object? v, Object? fmt) {
   return '$v';
 }
 
-Map<String, dynamic>? grafico(String modo, List<Map<String, dynamic>> meta, List agr, List<Fila> filas, List medidas) {
-  if (modo != 'agrupado' || filas.isEmpty) return null;
-  final ncl = agr.length;
-  var x = meta[0]['key'] as String;
-  final ys = meta.skip(ncl).take(2).map((e) => e['key'] as String).toList();
-  final temporal = ncl == 1 && const ['dia', 'semana', 'mes', 'trimestre', 'anio'].contains(agr[0]['por']);
-  String tipo;
-  if (temporal) {
-    tipo = filas.length > 2 ? 'lineas' : 'barras';
-  } else if (ncl == 1 && filas.length <= 6 && ys.length == 1 && medidas.isNotEmpty && const ['sum', 'count'].contains(medidas[0]['fn'])) {
-    tipo = 'torta';
-  } else {
-    tipo = 'barras';
-  }
-  if (ncl > 1) {
-    x = '__etiqueta';
-    for (final fi in filas) {
-      fi[x] = meta.take(ncl).map((mm) => js(fi[mm['key']])).join(' · ');
-    }
-  }
-  return {'tipo': tipo, 'x': x, 'y': ys, 'etiquetas': {for (final mm in meta.skip(ncl).take(2)) mm['key'] as String: mm['label']}};
-}
-
 List<String> resumenTexto(String modo, String dataset, int nFiltrado, int totalFilas, List<Map<String, dynamic>> meta, List<Fila> filas,
     Map<String, dynamic>? totales, List agr) {
   final ds = (Catalogo.datasets[dataset]['etiqueta'] as String).toLowerCase();
@@ -548,7 +525,6 @@ Map<String, dynamic> ejecutar(Map spec, Map<String, dynamic> tablas) {
     totales = t.isNotEmpty ? t : null;
   }
 
-  final graf = grafico(modo, meta, agr, filas, medidas);
   return {
     'titulo': _truthy(spec['titulo']) ? spec['titulo'] : tituloAuto(spec),
     'dataset': dataset,
@@ -557,7 +533,6 @@ Map<String, dynamic> ejecutar(Map spec, Map<String, dynamic> tablas) {
     'columnas': meta,
     'filas': filas,
     'totales': totales,
-    'grafico': graf,
     'resumen': resumenTexto(modo, dataset, nFiltrado, totalFilas, meta, filas, totales, agr),
     'condiciones': describir(spec),
     'notas': notas,

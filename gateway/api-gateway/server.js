@@ -46,9 +46,6 @@ app.use(cors());
 
 app.get('/health', (req, res) => res.json({ status: 'UP', service: 'api-gateway' }));
 
-// Rutas públicas (menú del día, consulta, login flow handled by Keycloak)
-app.use('/public/menus', createProxyMiddleware({ target: MENU_URL, changeOrigin: true, pathRewrite: { '^/public/menus': '/menus' } }));
-
 // ---------------------------------------------------------------------
 // Alta de usuarios (cuenta Keycloak + rol). Solo administradores.
 // POST /usuarios { rol, username?, registroUniv?, nombre, email?, telefono?, password }
@@ -163,7 +160,7 @@ const proxyAll = (patterns, target) => createProxyMiddleware({
   changeOrigin: true,
 });
 
-app.use(requireAuth, proxyAll(['/menus/**', '/insumos/**', '/porciones/**'], MENU_URL));
+app.use(requireAuth, proxyAll(['/menus/**', '/insumos/**'], MENU_URL));
 app.use(requireAuth, proxyAll(['/reservas/**', '/estudiantes/**', '/ingreso/**', '/asistencia/**'], COMENSALES_URL));
 app.use(requireAuth, proxyAll(['/pagos/**', '/facturas/**'], PAGOS_URL));
 // El rol sale del token (no del cliente): el servicio de IA lo usa para decidir qué datos entrega a los reportes.

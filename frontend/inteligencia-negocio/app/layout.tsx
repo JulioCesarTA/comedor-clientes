@@ -5,10 +5,8 @@ import SSOReceiver from './components/SSOReceiver';
 import EmbedShell from './components/EmbedShell';
 import './globals.css';
 
-// next/font — optimización auto de fuentes sin FOUT (exclusivo de Next.js)
 const inter = Inter({ subsets: ['latin'], display: 'swap' });
 
-// Metadata API — SEO dinámico (exclusivo Next.js)
 export const metadata: Metadata = {
   title: {
     default: 'Comedor UAGRM — Inteligencia de Negocio',
@@ -20,8 +18,7 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
-  // headers() es Server-only
-  const h = headers();
+  const h = headers();          // x-user / x-roles los pone middleware.ts a partir del token
   const user = h.get('x-user') || 'administrador';
   const roles = JSON.parse(h.get('x-roles') || '["administrador"]');
 

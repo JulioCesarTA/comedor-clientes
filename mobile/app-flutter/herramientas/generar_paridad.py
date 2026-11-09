@@ -1,8 +1,8 @@
-"""Genera los datos con los que se comprueba que el teléfono (JS + TFLite) calcula lo mismo que el servidor (Python + Keras).
+"""Genera los datos con los que se comprueba que el teléfono (Dart + TFLite) calcula lo mismo que el servidor (Python + Keras).
 
 Crea dos fotos sintéticas (porción completa y bandeja con la mitad comida), corre el método REAL del servidor
 (ia-ml-service/app/services/analitica/vision.py) y guarda: los píxeles, el mapa que produce el modelo .tflite y los
-resultados esperados. La prueba __tests__/paridad.test.js repite el cálculo en JS y compara.
+resultados esperados. La prueba test/paridad_test.dart repite el cálculo en Dart y compara.
 
 Uso: python herramientas/generar_paridad.py        (necesita TensorFlow, scikit-learn, Pillow)
 """
@@ -22,7 +22,7 @@ os.environ.setdefault("AGENTES_DATA_DIR", os.path.join(os.environ.get("TEMP", "/
 from app.services.analitica import vision  # noqa: E402  (el servidor de verdad)
 
 MODELO = os.path.join(AQUI, "..", "assets", "modelos", "bandeja_mobilenetv2_b3.tflite")
-SALIDA = os.path.join(AQUI, "..", "__tests__", "datos", "paridad.json")
+SALIDA = os.path.join(AQUI, "..", "test", "datos", "paridad.json")
 
 
 def bandeja(comidas):

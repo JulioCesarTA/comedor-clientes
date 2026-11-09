@@ -62,3 +62,6 @@ CREDENCIALES.local.md
 respaldo/
 
 deploy/ec2/realm/
+
+# Compilación de TypeScript (se genera sola)
+*.tsbuildinfo

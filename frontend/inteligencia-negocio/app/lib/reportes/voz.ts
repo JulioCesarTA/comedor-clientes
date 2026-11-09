@@ -5,7 +5,7 @@ const SR = (): any => (typeof window === 'undefined' ? null : (window as any).Sp
 
 export const vozDisponible = () => !!SR();
 
-export function mensajeErrorVoz(error: string): string {
+function mensajeErrorVoz(error: string): string {
   switch (error) {
     case 'not-allowed': case 'service-not-allowed': return 'Permite el micrófono para esta página (candado de la barra de direcciones).';
     case 'no-speech': return 'No se escuchó nada. Habla cerca del micrófono e inténtalo otra vez.';

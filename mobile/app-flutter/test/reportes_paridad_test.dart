@@ -65,13 +65,19 @@ void main() {
       final mio = <String, dynamic>{
         'dataset': r['dataset'], 'modo': r['modo'], 'titulo': r['titulo'], 'entendi': leido['entendi'], 'spec': leido['spec'],
         'confianza': leido['confianza'], 'continuacion': leido['continuacion'], 'columnas': r['columnas'], 'filas': r['filas'],
-        'totales': r['totales'], 'grafico': r['grafico'], 'resumen': r['resumen'], 'condiciones': r['condiciones'],
+        'totales': r['totales'], 'resumen': r['resumen'], 'condiciones': r['condiciones'],
         'notas': [...(r['notas'] as List), ...(leido['notas'] as List)], 'registrosAnalizados': r['registrosAnalizados'],
         'totalFilas': r['totalFilas'], 'mostradas': r['mostradas'],
       };
       for (final k in e.keys) {
+        if (k == 'grafico') continue; // el teléfono muestra solo la tabla: no calcula gráfico
+        var esperado = e[k];
+        if (k == 'filas') {
+          // «__etiqueta» es una columna que solo existe para el gráfico de la web
+          esperado = [for (final f in esperado as List) {...(f as Map)}..remove('__etiqueta')];
+        }
         // pasar por JSON deja `mio` con los mismos tipos que `e` (null, listas, mapas)
-        final d = difiere(jsonDecode(jsonEncode(mio[k])), e[k], k);
+        final d = difiere(jsonDecode(jsonEncode(mio[k])), esperado, k);
         expect(d, isNull, reason: 'difiere «$k» en «$texto»');
       }
     });

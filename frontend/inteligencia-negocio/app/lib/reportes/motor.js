@@ -352,4 +352,4 @@ function ejecutar(spec, tablas) {
   };
 }
 
-module.exports = { ejecutar, describir, tituloAuto, medidaInfo, fmtValor, ConsultaInvalida, POR_ETIQUETA, aObjetos };
+module.exports = { ejecutar, describir, medidaInfo, fmtValor, aObjetos };
