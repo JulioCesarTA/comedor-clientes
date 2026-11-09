@@ -164,7 +164,7 @@ const proxyAll = (patterns, target) => createProxyMiddleware({
 });
 
 app.use(requireAuth, proxyAll(['/menus/**', '/insumos/**', '/porciones/**'], MENU_URL));
-app.use(requireAuth, proxyAll(['/reservas/**', '/estudiantes/**', '/ingreso/**'], COMENSALES_URL));
+app.use(requireAuth, proxyAll(['/reservas/**', '/estudiantes/**', '/ingreso/**', '/asistencia/**'], COMENSALES_URL));
 app.use(requireAuth, proxyAll(['/pagos/**', '/facturas/**'], PAGOS_URL));
 // El rol sale del token (no del cliente): el servicio de IA lo usa para decidir qué datos entrega a los reportes.
 app.use('/reportes', requireAuth, (req, res, next) => {
