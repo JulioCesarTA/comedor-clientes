@@ -19,6 +19,11 @@
               "zone.js"
             ],
             "tsConfig": "tsconfig.json",
+            "optimization": {
+              "scripts": true,
+              "styles": true,
+              "fonts": false
+            },
             "assets": [
               {
                 "glob": "manifest.webmanifest",
