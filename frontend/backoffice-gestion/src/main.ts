@@ -1,7 +1,6 @@
 import { bootstrapApplication } from '@angular/platform-browser';
 import { provideRouter, RouterOutlet, RouterLink, RouterLinkActive } from '@angular/router';
-import { provideHttpClient, HttpClient } from '@angular/common/http';
-import { Component, OnInit, OnDestroy, signal, inject, AfterViewInit, computed } from '@angular/core';
+import { Component, OnInit, OnDestroy, signal, AfterViewInit, computed } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { CommonModule, DecimalPipe, JsonPipe } from '@angular/common';
 
@@ -16,16 +15,11 @@ const LS = {
 
 type Cargado<T> = { data: T; origen: 'red' | 'local'; fecha: string };
 
-// Intenta la red; si no hay conexión usa la última copia guardada.
-async function cargarConCache<T>(path: string, clave: string): Promise<Cargado<T> | null> {
+// Intenta la red; si no hay conexión usa la última copia guardada. `campo` es el campo raíz de la consulta GraphQL.
+async function cargarConCache<T>(query: string, campo: string, clave: string): Promise<Cargado<T> | null> {
   try {
     if (!navigator.onLine) throw new Error('offline');
-    const ctl = new AbortController();
-    const t = setTimeout(() => ctl.abort(), 4000);
-    const r = await fetch(`${API_URL}${path}`, { signal: ctl.signal });
-    clearTimeout(t);
-    if (!r.ok) throw new Error(String(r.status));
-    const data = await r.json();
+    const data = (await gql<any>(query, {}, 4000))[campo];
     const fecha = new Date().toISOString();
     LS.set(clave, { data, fecha });
     return { data, origen: 'red', fecha };
@@ -48,27 +42,35 @@ function authHeaders(): Record<string, string> {
   return t ? { Authorization: `Bearer ${t}` } : {};
 }
 
-// Llamada con tiempo límite: si el servidor no responde se trata como "sin conexión".
-async function llamar(path: string, init: RequestInit = {}, ms = 6000): Promise<any> {
+// El back-office habla con el servidor SOLO por GraphQL (SPEC §4): POST /graphql en el api-gateway, que pasa al
+// graphql-gateway. Con tiempo límite: si el servidor no responde se trata como "sin conexión".
+async function gql<T = any>(query: string, variables: Record<string, any> = {}, ms = 6000): Promise<T> {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), ms);
   try {
-    const r = await fetch(`${API_URL}${path}`, {
-      ...init, signal: ctl.signal, headers: { 'content-type': 'application/json', ...authHeaders(), ...(init.headers || {}) },
+    const r = await fetch(`${API_URL}/graphql`, {
+      method: 'POST', signal: ctl.signal,
+      headers: { 'content-type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ query, variables }),
     });
-    if (!r.ok) {
-      const err: any = new Error(String(r.status));
-      try { err.detalle = (await r.json()).detail; } catch {}
+    const j = await r.json().catch(() => null);
+    const motivo = j?.errors?.[0]?.message;
+    if (!r.ok || motivo) {
+      const err: any = new Error(motivo || `El servidor respondió ${r.status}`);
+      err.detalle = err.message;
       throw err;
     }
-    return await r.json();
+    return j.data as T;
   } finally { clearTimeout(t); }
 }
+
+const Q_INSUMOS = '{ insumos { id nombre unidad stockMinimo stockTotal } }';
+const Q_BECA = 'tieneBeca tipo cupoRacionesMes racionesUsadasMes cubreHoy vigenteDesde vigenteHasta';
 
 // Guarda el paquete cada vez que hay conexión; sin conexión usa el último guardado.
 async function cargarPaquete(): Promise<{ data: Paquete; origen: 'red' | 'local' } | null> {
   try {
-    const data = await llamar('/agentes/paquete-offline', {}, 15000);
+    const data = (await gql<any>('{ paqueteOffline }', {}, 60000)).paqueteOffline;
     LS.set('paquete', data);
     return { data, origen: 'red' };
   } catch {
@@ -326,7 +328,6 @@ class LoginComponent {
   `,
 })
 class MenusComponent implements OnInit {
-  http = inject(HttpClient);
   turno = 'ALMUERZO';
   menus = signal<any[]>([]);
   insumos = signal<any[]>([]);
@@ -336,7 +337,7 @@ class MenusComponent implements OnInit {
     const mapa = new Map<string, { fecha: string; turno: string; platos: Map<string, any> }>();
     for (const m of this.menus()) {
       const d = mapa.get(m.fecha) || { fecha: m.fecha, turno: m.turno, platos: new Map() };
-      for (const p of this.toPorciones(m.porciones)) {
+      for (const p of (m.porciones || []).map((x: any) => ({ id: x.platoId, ...x }))) {
         const previo = d.platos.get(p.id);
         if (!previo || p.disponibles > previo.disponibles) d.platos.set(p.id, p);
       }
@@ -350,15 +351,15 @@ class MenusComponent implements OnInit {
     Number(this.stockTotal(a) > a.stockMinimo) - Number(this.stockTotal(b) > b.stockMinimo)));
   ngOnInit() { this.load(); }
   load() {
-    this.http.get<any[]>(`${API_URL}/menus/semana/${this.turno}`).subscribe(r => this.menus.set(r));
-    cargarConCache<any[]>('/insumos', 'insumos').then(c => {
+    gql<any>('query($t: String!) { menusSemana(turno: $t) { fecha turno porciones { platoId cupo disponibles } } }', { t: this.turno }, 15000)
+      .then(d => this.menus.set(d.menusSemana)).catch(() => this.menus.set([]));
+    cargarConCache<any[]>(Q_INSUMOS, 'insumos', 'insumos').then(c => {
       if (!c) return;
       this.insumos.set(c.data);
       this.stockBajo.set(c.data.filter((i: any) => this.stockTotal(i) <= i.stockMinimo));
     });
   }
-  toPorciones(p: any) { return Object.entries(p || {}).map(([id, v]: any) => ({ id, ...v })); }
-  stockTotal(i: any) { return (i.lotes || []).reduce((s: number, l: any) => s + (l.cantidad?.valor || 0), 0); }
+  stockTotal(i: any) { return i.stockTotal ?? 0; }
   statusColor(p: any) {
     const r = p.disponibles / p.cupo;
     return r > 0.5 ? 'bg-emerald-500/15 text-emerald-400' : r > 0.2 ? 'bg-amber-500/15 text-amber-400' : 'bg-red-500/15 text-red-400';
@@ -538,7 +539,6 @@ class MenusComponent implements OnInit {
   `,
 })
 class AdminEstudiantesComponent implements OnInit {
-  http = inject(HttpClient);
   estudiantes = signal<any[]>([]);
   usuarios = signal<any[]>([]);
   seleccionado = signal<any>(null);
@@ -558,24 +558,16 @@ class AdminEstudiantesComponent implements OnInit {
   ngOnInit() { this.load(); }
 
   load() {
-    this.http.get<any[]>(`${API_URL}/usuarios`).subscribe({ next: r => this.usuarios.set(r || []), error: () => this.usuarios.set([]) });
-    this.http.get<any[]>(`${API_URL}/estudiantes`).subscribe({
-      next: r => {
-        const lista = r || [];
+    gql<any>('{ usuarios { username nombre email enabled roles } }', {}, 15000)
+      .then(d => this.usuarios.set(d.usuarios || [])).catch(() => this.usuarios.set([]));
+    // Una sola consulta trae a los estudiantes con su beca (antes era una llamada por estudiante)
+    gql<any>(`{ estudiantes { id registroUniv nombre email telefono beca { ${Q_BECA} } } }`, {}, 30000)
+      .then(d => {
+        const lista = d.estudiantes || [];
         this.estudiantes.set(lista);
-        // Cargar becas en paralelo para pintar la columna
-        const map: Record<string, any> = {};
-        let left = lista.length;
-        if (left === 0) { this.becaMap.set({}); return; }
-        for (const e of lista) {
-          this.http.get<any>(`${API_URL}/estudiantes/${e.id}/beca`).subscribe({
-            next: (b: any) => { if (b?.tieneBeca) map[e.id] = b; left--; if (left === 0) this.becaMap.set({ ...map }); },
-            error: () => { left--; if (left === 0) this.becaMap.set({ ...map }); }
-          });
-        }
-      },
-      error: () => this.estudiantes.set([])
-    });
+        this.becaMap.set(Object.fromEntries(lista.filter((e: any) => e.beca?.tieneBeca).map((e: any) => [e.id, e.beca])));
+      })
+      .catch(() => { this.estudiantes.set([]); this.becaMap.set({}); });
   }
 
   // Una fila por cuenta (Keycloak) + estudiantes del padrón que aún no tienen cuenta.
@@ -614,9 +606,8 @@ class AdminEstudiantesComponent implements OnInit {
     const b = this.becaMap()[e.id];
     this.becaActual.set(b || null);
     if (!b) {
-      this.http.get(`${API_URL}/estudiantes/${e.id}/beca`).subscribe({
-        next: (res: any) => this.becaActual.set(res?.tieneBeca ? res : null),
-      });
+      gql<any>(`query($id: ID!) { beca(estudianteId: $id) { ${Q_BECA} } }`, { id: e.id })
+        .then(d => this.becaActual.set(d.beca?.tieneBeca ? d.beca : null)).catch(() => {});
     }
   }
 
@@ -641,7 +632,7 @@ class AdminEstudiantesComponent implements OnInit {
     this.creando = true;
     const rol = this.nuevoRol;
     const usuario = rol === 'estudiante' ? this.nuevoRegistro.trim() : this.nuevoUsuario.trim();
-    this.http.post(`${API_URL}/usuarios`, {
+    gql('mutation($d: UsuarioIn!) { crearUsuario(datos: $d) }', { d: {
       rol,
       registroUniv: this.nuevoRegistro.trim(),
       username: this.nuevoUsuario.trim(),
@@ -649,24 +640,21 @@ class AdminEstudiantesComponent implements OnInit {
       email: this.nuevoEmail.trim(),
       telefono: this.nuevoTel,
       password: this.nuevaPassword,
-    }).subscribe({
-      next: () => {
-        this.creando = false;
-        this.notif(`Usuario «${usuario}» creado (${rol}). Contraseña: ${this.verPassword ? this.nuevaPassword : 'la ingresada'}`);
-        this.nuevoRegistro=''; this.nuevoUsuario=''; this.nuevoNombre=''; this.nuevoEmail=''; this.nuevoTel=''; this.nuevaPassword=''; this.verPassword = false;
-        this.load();
-      },
-      error: e => { this.creando = false; this.notif('Error: ' + (e.error?.error || e.error?.message || e.message), 'err'); }
-    });
+    } }, 30000).then(() => {
+      this.creando = false;
+      this.notif(`Usuario «${usuario}» creado (${rol}). Contraseña: ${this.verPassword ? this.nuevaPassword : 'la ingresada'}`);
+      this.nuevoRegistro=''; this.nuevoUsuario=''; this.nuevoNombre=''; this.nuevoEmail=''; this.nuevoTel=''; this.nuevaPassword=''; this.verPassword = false;
+      this.load();
+    }).catch(e => { this.creando = false; this.notif('Error: ' + e.message, 'err'); });
   }
 
   asignarBeca() {
     const est = this.seleccionado();
     if (!est) return;
-    this.http.post(`${API_URL}/estudiantes/${est.id}/beca`, { tipo: this.nuevoTipoBeca, mesesVigencia: this.nuevoMesesVig }).subscribe({
-      next: () => { this.notif(`Beca ${this.nuevoTipoBeca} asignada a ${est.nombre}`); this.elegir(est); this.load(); },
-      error: e => this.notif('Error: ' + (e.error?.message || e.message), 'err')
-    });
+    gql('mutation($id: ID!, $t: String!, $m: Int!) { asignarBeca(estudianteId: $id, tipo: $t, mesesVigencia: $m) }',
+      { id: est.id, t: this.nuevoTipoBeca, m: Number(this.nuevoMesesVig) }, 15000)
+      .then(() => { this.notif(`Beca ${this.nuevoTipoBeca} asignada a ${est.nombre}`); this.becaMap.update(m => { const x = { ...m }; delete x[est.id]; return x; }); this.elegir(est); this.load(); })
+      .catch(e => this.notif('Error: ' + e.message, 'err'));
   }
 }
 
@@ -758,7 +746,6 @@ class AdminEstudiantesComponent implements OnInit {
   `,
 })
 class AdminOperacionComponent implements OnInit {
-  http = inject(HttpClient);
   menuFecha = new Date().toISOString().slice(0, 10);
   menuTurno = 'ALMUERZO';
   menuPlatos: { id: string; cupo: number }[] = [{ id: '', cupo: 50 }];
@@ -767,36 +754,35 @@ class AdminOperacionComponent implements OnInit {
   insNuevoNombre = ''; insNuevaUnidad = 'kg'; insNuevoMin = 5;
   toast = signal<any>(null);
   ngOnInit() { this.load(); }
-  load() { this.http.get<any[]>(`${API_URL}/insumos`).subscribe({ next: r => this.insumos.set(r || []), error: () => this.insumos.set([]) }); }
+  load() { gql<any>(Q_INSUMOS, {}, 15000).then(d => this.insumos.set(d.insumos || [])).catch(() => this.insumos.set([])); }
   notif(msg: string, kind: 'ok'|'err' = 'ok') { this.toast.set({ msg, kind }); setTimeout(() => this.toast.set(null), 4000); }
   agregarPlato() { this.menuPlatos.push({ id: '', cupo: 50 }); }
   quitarPlato(i: number) { this.menuPlatos.splice(i, 1); }
   publicarMenu() {
     const platos = this.menuPlatos.filter(p => p.id).map(p => ({ platoId: p.id, cupo: Number(p.cupo) }));
     if (platos.length === 0) return this.notif('Debe agregar al menos un plato', 'err');
-    this.http.post(`${API_URL}/menus`, { fecha: this.menuFecha, turno: this.menuTurno, platos }).subscribe({
-      next: () => { this.notif('Menú publicado'); this.menuPlatos = [{ id: '', cupo: 50 }]; },
-      error: e => this.notif('Error: ' + (e.error?.message || e.message), 'err')
-    });
+    gql('mutation($f: String!, $t: String!, $p: [PlatoIn!]!) { publicarMenu(fecha: $f, turno: $t, platos: $p) }',
+      { f: this.menuFecha, t: this.menuTurno, p: platos }, 15000)
+      .then(() => { this.notif('Menú publicado'); this.menuPlatos = [{ id: '', cupo: 50 }]; })
+      .catch(e => this.notif('Error: ' + e.message, 'err'));
   }
   recibirLote() {
     const loteId = 'lote-' + Date.now();
     const insumo = this.insumos().find(i => i.id === this.insSel);
     const unidad = insumo?.unidad || 'kg';
-    this.http.post(`${API_URL}/insumos/lotes`, {
-      insumoId: this.insSel, loteId, cantidad: Number(this.loteCant), unidad,
-      vence: this.loteVence || new Date(Date.now()+30*24*3600*1000).toISOString().slice(0,10)
-    }).subscribe({
-      next: () => { this.notif('Lote registrado'); this.loteCant = null; this.loteProv = ''; this.load(); },
-      error: e => this.notif('Error: ' + (e.error?.message || e.message), 'err')
-    });
+    gql('mutation($i: ID!, $l: String!, $c: Float!, $u: String!, $v: String!) { registrarLote(insumoId: $i, loteId: $l, cantidad: $c, unidad: $u, vence: $v) }', {
+      i: this.insSel, l: loteId, c: Number(this.loteCant), u: unidad,
+      v: this.loteVence || new Date(Date.now()+30*24*3600*1000).toISOString().slice(0,10)
+    }, 15000)
+      .then(() => { this.notif('Lote registrado'); this.loteCant = null; this.loteProv = ''; this.load(); })
+      .catch(e => this.notif('Error: ' + e.message, 'err'));
   }
   crearInsumo() {
     const id = this.insNuevoNombre.toUpperCase().replace(/\s+/g, '_');
-    this.http.post(`${API_URL}/insumos`, { id, nombre: this.insNuevoNombre, unidad: this.insNuevaUnidad, stockMinimo: Number(this.insNuevoMin) }).subscribe({
-      next: () => { this.notif('Insumo creado'); this.insNuevoNombre = ''; this.load(); },
-      error: e => this.notif('Error: ' + (e.error?.message || e.message), 'err')
-    });
+    gql('mutation($id: ID!, $n: String!, $u: String!, $m: Float!) { crearInsumo(id: $id, nombre: $n, unidad: $u, stockMinimo: $m) }',
+      { id, n: this.insNuevoNombre, u: this.insNuevaUnidad, m: Number(this.insNuevoMin) }, 15000)
+      .then(() => { this.notif('Insumo creado'); this.insNuevoNombre = ''; this.load(); })
+      .catch(e => this.notif('Error: ' + e.message, 'err'));
   }
 }
 
@@ -853,7 +839,6 @@ class AdminOperacionComponent implements OnInit {
   `,
 })
 class CajaComponent implements OnInit, AfterViewInit {
-  http = inject(HttpClient);
   qr = '';
   scanning = signal(false);
   resultado = signal<any>(null);
@@ -878,13 +863,13 @@ class CajaComponent implements OnInit, AfterViewInit {
   }
   stopCamera() { if (this.html5QrCode) { this.html5QrCode.stop(); this.scanning.set(false); } }
   validar() {
-    this.http.post(`${API_URL}/ingreso/validar-qr`, { qr: this.qr }).subscribe({
-      next: (r: any) => {
+    gql<any>('mutation($q: String!) { validarQr(qr: $q) { ok motivo reservaId } }', { q: this.qr }, 15000)
+      .then(d => {
+        const r = d.validarQr;
         this.resultado.set(r);
         if (r.ok) this.contador.update(c => c + 1); else this.rechazadas.update(c => c + 1);
-      },
-      error: e => this.resultado.set({ ok: false, motivo: e.message })
-    });
+      })
+      .catch(e => this.resultado.set({ ok: false, motivo: e.message }));
   }
 }
 
@@ -1041,7 +1026,7 @@ class AgentesComponent implements OnInit, OnDestroy {
   }
 
   private async cargarHorarios() {
-    const h = await llamar('/agentes/horarios');
+    const h = (await gql<any>('{ horarios }')).horarios;
     this.horarios.set(h);
     this.borrador.update(b => {
       const nuevo = { ...b };
@@ -1064,8 +1049,8 @@ class AgentesComponent implements OnInit, OnDestroy {
     const b = this.borrador()[n];
     this.guardandoH.set(n);
     try {
-      const r = await llamar(`/agentes/horarios/${n}`, { method: 'PUT', body: JSON.stringify({
-        activo: b.activo, modo: b.modo, cadaMin: Math.round(Number(b.valor) * Number(b.unidad)), hora: b.hora, dias: b.dias }) }, 10000);
+      const r = (await gql<any>('mutation($a: String!, $h: JSON!) { guardarHorario(agente: $a, horario: $h) }', { a: n, h: {
+        activo: b.activo, modo: b.modo, cadaMin: Math.round(Number(b.valor) * Number(b.unidad)), hora: b.hora, dias: b.dias } }, 10000)).guardarHorario;
       this.horarios.update(x => ({ ...x, [n]: r }));
       this.borrador.update(x => ({ ...x, [n]: this.aBorrador(r.horario) }));
       this.msgH.update(x => ({ ...x, [n]: 'Guardado. ' + (r.horario.activo ? 'Se ejecutará solo según este horario.' : 'Quedó pausada.') }));
@@ -1080,16 +1065,16 @@ class AgentesComponent implements OnInit, OnDestroy {
 
   async refrescar() {
     try {
-      const [lista, tg] = await Promise.all([llamar('/agentes/propuestas'), llamar('/agentes/telegram')]);
+      const { propuestas: lista, telegram: tg } = await gql<any>('{ propuestas telegram }');
       this.servidor.set(true); this.tg.set(tg);
       this.cargarHorarios().catch(() => {});
       LS.set('propuestas.servidor', lista);
-      if (await this.sincronizar()) { this.propuestas.set(this.mezclar(await llamar('/agentes/propuestas'))); }
+      if (await this.sincronizar()) { this.propuestas.set(this.mezclar((await gql<any>('{ propuestas }')).propuestas)); }
       else this.propuestas.set(this.mezclar(lista));
       if (Date.now() - this.ultimoPaquete > 10 * 60 * 1000) {      // deja datos frescos para trabajar sin conexión
         this.ultimoPaquete = Date.now();
         cargarPaquete().then(q => q && this.paquete.set({ generado: q.data.generado }));
-        cargarConCache<any[]>('/insumos', 'insumos');
+        cargarConCache<any[]>(Q_INSUMOS, 'insumos', 'insumos');
       }
     } catch {
       this.servidor.set(false);
@@ -1103,12 +1088,12 @@ class AgentesComponent implements OnInit, OnDestroy {
     const locales = propuestasLocales(), decisiones = LS.get<any[]>('decisiones', []);
     if (!locales.length && !decisiones.length) return false;
     if (locales.length) {
-      await llamar('/agentes/propuestas/sincronizar', { method: 'POST', body: JSON.stringify(locales.map(p =>
-        ({ tipo: p.tipo, clave: p.clave, titulo: p.titulo, resumen: p.resumen, payload: p.payload, decision: p.decision ?? null }))) }, 20000);
+      await gql('mutation($i: JSON!) { sincronizarPropuestas(items: $i) }', { i: locales.map(p =>
+        ({ tipo: p.tipo, clave: p.clave, titulo: p.titulo, resumen: p.resumen, payload: p.payload, decision: p.decision ?? null })) }, 20000);
       LS.set('propuestas.local', []);
     }
     for (const d of decisiones) {
-      try { await llamar(`/agentes/propuestas/${d.id}/${d.aprobar ? 'aprobar' : 'rechazar'}`, { method: 'POST', body: '{}' }, 20000); } catch {}
+      try { await gql('mutation($id: ID!, $a: Boolean!) { decidirPropuesta(id: $id, aprobar: $a) }', { id: d.id, a: d.aprobar }, 20000); } catch {}
     }
     LS.set('decisiones', []);
     return true;
@@ -1139,7 +1124,7 @@ class AgentesComponent implements OnInit, OnDestroy {
         LS.set('propuestas.local', propuestasLocales().map(x => x.id === p.id ? { ...x, decision: aprobar ? 'aprobar' : 'rechazar',
           estado: aprobar ? 'APROBADA' : 'RECHAZADA', resultado: 'Decidida sin conexión: se aplicará al volver la conexión.' } : x));
       } else {
-        try { await llamar(`/agentes/propuestas/${p.id}/${aprobar ? 'aprobar' : 'rechazar'}`, { method: 'POST', body: '{}' }, 20000); }
+        try { await gql('mutation($id: ID!, $a: Boolean!) { decidirPropuesta(id: $id, aprobar: $a) }', { id: p.id, a: aprobar }, 20000); }
         catch { LS.set('decisiones', [...LS.get<any[]>('decisiones', []), { id: p.id, aprobar }]); }
       }
     } finally { this.resolviendo.set(null); }
@@ -1152,7 +1137,8 @@ class AgentesComponent implements OnInit, OnDestroy {
     try {
       let r: any, offline = false;
       try {
-        r = await llamar(`/agentes/${name}`, { method: 'POST', body: JSON.stringify({ objetivo: 'Reporte operativo', contexto: {} }) }, 60000);
+        r = (await gql<any>('mutation($a: String!, $o: String!) { ejecutarAgente(agente: $a, objetivo: $o) }',
+          { a: name, o: 'Reporte operativo' }, 120000)).ejecutarAgente;
       } catch {
         offline = true;
         const q = await cargarPaquete();
@@ -1374,7 +1360,6 @@ esperarSSOEmbebido().then(() => {
         { path: 'admin/estudiantes', component: AdminEstudiantesComponent },
         { path: 'admin/operacion', component: AdminOperacionComponent },
       ]),
-      provideHttpClient(),
     ],
   });
 });

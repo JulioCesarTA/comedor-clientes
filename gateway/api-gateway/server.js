@@ -18,6 +18,7 @@ const MENU_URL = process.env.MENU_URL || 'http://menu-inventario-service:8080';
 const COMENSALES_URL = process.env.COMENSALES_URL || 'http://comensales-reservas-service:8080';
 const PAGOS_URL = process.env.PAGOS_URL || 'http://pagos-tickets-service:8080';
 const IA_URL = process.env.IA_URL || 'http://ia-ml-service:8080';
+const GRAPHQL_URL = process.env.GRAPHQL_URL || 'http://graphql-gateway:4000';
 
 const client = jwksClient({ jwksUri: JWKS_URI, cache: true, rateLimit: true });
 
@@ -160,6 +161,8 @@ const proxyAll = (patterns, target) => createProxyMiddleware({
   changeOrigin: true,
 });
 
+// El back-office habla SOLO GraphQL (SPEC §4): /graphql va al graphql-gateway, con el mismo control de token.
+app.use(requireAuth, proxyAll(['/graphql'], GRAPHQL_URL));
 app.use(requireAuth, proxyAll(['/menus/**', '/insumos/**'], MENU_URL));
 app.use(requireAuth, proxyAll(['/reservas/**', '/estudiantes/**', '/ingreso/**', '/asistencia/**'], COMENSALES_URL));
 app.use(requireAuth, proxyAll(['/pagos/**', '/facturas/**'], PAGOS_URL));
