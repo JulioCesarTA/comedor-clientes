@@ -15,15 +15,37 @@
             "outputPath": "dist",
             "index": "src/index.html",
             "browser": "src/main.ts",
-            "polyfills": ["zone.js"],
+            "polyfills": [
+              "zone.js"
+            ],
             "tsConfig": "tsconfig.json",
-            "assets": [],
-            "styles": ["src/styles.css"]
+            "assets": [
+              {
+                "glob": "manifest.webmanifest",
+                "input": "src",
+                "output": "/"
+              },
+              {
+                "glob": "sw.js",
+                "input": "src",
+                "output": "/"
+              },
+              {
+                "glob": "**/*",
+                "input": "src/iconos",
+                "output": "/iconos"
+              }
+            ],
+            "styles": [
+              "src/styles.css"
+            ]
           }
         },
         "serve": {
           "builder": "@angular-devkit/build-angular:dev-server",
-          "options": { "buildTarget": "backoffice:build" }
+          "options": {
+            "buildTarget": "backoffice:build"
+          }
         }
       }
     }

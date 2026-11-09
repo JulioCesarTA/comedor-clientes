@@ -7,10 +7,43 @@ import { CommonModule, DecimalPipe, JsonPipe } from '@angular/common';
 const API_URL = (typeof window !== 'undefined' && (window as any).__API_URL__) || `${window.location.protocol}//${window.location.hostname}:8080`;
 const KC_URL = (typeof window !== 'undefined' && (window as any).__KC_URL__) || `${window.location.protocol}//${window.location.hostname}:8085`;
 
-// =================== ALMACENAMIENTO LOCAL Y AGENTE SIN CONEXIÓN ===================
+// =================== ALMACENAMIENTO LOCAL (IndexedDB) ===================
+// Todo lo que el back-office guarda para trabajar sin conexión vive en IndexedDB (base «backoffice», almacén «kv»).
+// Al arrancar se copia a memoria (lecturas instantáneas); cada escritura va a memoria y a IndexedDB.
+const memoria = new Map<string, any>();
+let idb: IDBDatabase | null = null;
+
+function abrirIdb(): Promise<IDBDatabase> {
+  return new Promise((ok, mal) => {
+    const r = indexedDB.open('backoffice', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('kv');
+    r.onsuccess = () => ok(r.result);
+    r.onerror = () => mal(r.error);
+  });
+}
+
+async function cargarAlmacen(): Promise<void> {
+  try {
+    idb = await abrirIdb();
+    await new Promise<void>((ok) => {
+      const q = idb!.transaction('kv').objectStore('kv').openCursor();
+      q.onsuccess = () => { const c = q.result; if (c) { memoria.set(String(c.key), c.value); c.continue(); } else ok(); };
+      q.onerror = () => ok();
+    });
+    // lo que versiones anteriores dejaron en localStorage pasa a IndexedDB una sola vez
+    for (const k of Object.keys(localStorage).filter((x) => x.startsWith('cu.'))) {
+      try { LS.set(k.slice(3), JSON.parse(localStorage.getItem(k) || 'null')); } catch {}
+      localStorage.removeItem(k);
+    }
+  } catch { /* navegador sin IndexedDB (modo privado): se trabaja solo en memoria */ }
+}
+
 const LS = {
-  get<T>(k: string, def: T): T { try { const v = localStorage.getItem('cu.' + k); return v ? JSON.parse(v) : def; } catch { return def; } },
-  set(k: string, v: any) { try { localStorage.setItem('cu.' + k, JSON.stringify(v)); } catch {} },
+  get<T>(k: string, def: T): T { return memoria.has(k) ? memoria.get(k) : def; },
+  set(k: string, v: any) {
+    memoria.set(k, v);
+    try { idb?.transaction('kv', 'readwrite').objectStore('kv').put(v, k); } catch {}
+  },
 };
 
 type Cargado<T> = { data: T; origen: 'red' | 'local'; fecha: string };
@@ -48,11 +81,19 @@ async function gql<T = any>(query: string, variables: Record<string, any> = {}, 
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), ms);
   try {
-    const r = await fetch(`${API_URL}/graphql`, {
-      method: 'POST', signal: ctl.signal,
-      headers: { 'content-type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ query, variables }),
-    });
+    let r: Response;
+    try {
+      r = await fetch(`${API_URL}/graphql`, {
+        method: 'POST', signal: ctl.signal,
+        headers: { 'content-type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ query, variables }),
+      });
+    } catch {                                     // sin red o el servidor no respondió a tiempo
+      const err: any = new Error('Sin conexión con el servidor');
+      err.sinRed = true;
+      throw err;
+    }
+    if (r.status >= 502) { const err: any = new Error(`Servidor no disponible (${r.status})`); err.sinRed = true; throw err; }
     const j = await r.json().catch(() => null);
     const motivo = j?.errors?.[0]?.message;
     if (!r.ok || motivo) {
@@ -63,6 +104,80 @@ async function gql<T = any>(query: string, variables: Record<string, any> = {}, 
     return j.data as T;
   } finally { clearTimeout(t); }
 }
+
+// =================== COLA DE SINCRONIZACIÓN (SPEC §6) ===================
+// Una operación hecha sin conexión entra en la cola (guardada en IndexedDB). Al volver la red se envía en orden,
+// con reintentos a 1, 2, 4 y 8 segundos. Cada operación muestra su estado: pendiente, sincronizada o error.
+type Operacion = {
+  id: string; descripcion: string; query: string; variables: Record<string, any>;
+  estado: 'pendiente' | 'sincronizada' | 'error'; intentos: number; error?: string; creada: number; enviada?: number;
+};
+const ESPERAS_S = [1, 2, 4, 8];
+const cola = signal<Operacion[]>([]);          // se llena desde IndexedDB al arrancar
+const enLinea = signal(typeof navigator === 'undefined' ? true : navigator.onLine);
+let sincronizando = false;
+
+function guardarCola(lista: Operacion[]) {
+  // se conservan las últimas 20 ya sincronizadas para mostrarlas; lo pendiente y con error, siempre
+  const hechas = lista.filter((o) => o.estado === 'sincronizada').slice(-20);
+  const resto = lista.filter((o) => o.estado !== 'sincronizada');
+  const nueva = lista.filter((o) => resto.includes(o) || hechas.includes(o));
+  cola.set(nueva);
+  LS.set('cola', nueva);
+}
+
+function actualizarOp(id: string, cambios: Partial<Operacion>) {
+  guardarCola(cola().map((o) => (o.id === id ? { ...o, ...cambios } : o)));
+}
+
+const esperar = (s: number) => new Promise((r) => setTimeout(r, s * 1000));
+
+/** Envía lo pendiente, en orden. Si no hay red tras los reintentos, se detiene y espera a que vuelva. */
+async function sincronizarCola(): Promise<void> {
+  if (sincronizando) return;
+  sincronizando = true;
+  try {
+    for (const op of cola().filter((o) => o.estado === 'pendiente')) {
+      let hecho = false;
+      for (let i = 0; i <= ESPERAS_S.length && !hecho; i++) {
+        if (i > 0) await esperar(ESPERAS_S[i - 1]);
+        try {
+          await gql(op.query, op.variables, 20000);
+          actualizarOp(op.id, { estado: 'sincronizada', enviada: Date.now(), error: undefined, intentos: op.intentos + i + 1 });
+          hecho = true;
+        } catch (e: any) {
+          if (!e.sinRed) {                       // el servidor la rechazó: no se reintenta sola
+            actualizarOp(op.id, { estado: 'error', error: e.message, intentos: op.intentos + i + 1 });
+            hecho = true;
+          } else {
+            actualizarOp(op.id, { intentos: op.intentos + i + 1, error: 'Sin conexión: se reintentará' });
+          }
+        }
+      }
+      if (!hecho) return;                        // sigue sin red: el resto espera para no perder el orden
+    }
+  } finally { sincronizando = false; }
+}
+
+/** Ejecuta una mutación; si no hay conexión la deja en la cola. Lanza el error si el servidor la rechazó. */
+async function ejecutarOEncolar(descripcion: string, query: string, variables: Record<string, any>): Promise<'enviada' | 'en_cola'> {
+  if (navigator.onLine) {
+    try { await gql(query, variables, 15000); return 'enviada'; }
+    catch (e: any) { if (!e.sinRed) throw e; }
+  }
+  guardarCola([...cola(), { id: crypto.randomUUID(), descripcion, query, variables, estado: 'pendiente', intentos: 0, creada: Date.now() }]);
+  sincronizarCola();
+  return 'en_cola';
+}
+
+function reintentarOp(id: string) {
+  actualizarOp(id, { estado: 'pendiente', error: undefined });
+  sincronizarCola();
+}
+
+function quitarOp(id: string) { guardarCola(cola().filter((o) => o.id !== id)); }
+
+const EN_COLA = 'Sin conexión: quedó en la cola y se enviará sola al volver la red.';
 
 const Q_INSUMOS = '{ insumos { id nombre unidad stockMinimo stockTotal } }';
 const Q_BECA = 'tieneBeca tipo cupoRacionesMes racionesUsadasMes cubreHoy vigenteDesde vigenteHasta';
@@ -632,7 +747,7 @@ class AdminEstudiantesComponent implements OnInit {
     this.creando = true;
     const rol = this.nuevoRol;
     const usuario = rol === 'estudiante' ? this.nuevoRegistro.trim() : this.nuevoUsuario.trim();
-    gql('mutation($d: UsuarioIn!) { crearUsuario(datos: $d) }', { d: {
+    ejecutarOEncolar(`Crear cuenta ${usuario} (${rol})`, 'mutation($d: UsuarioIn!) { crearUsuario(datos: $d) }', { d: {
       rol,
       registroUniv: this.nuevoRegistro.trim(),
       username: this.nuevoUsuario.trim(),
@@ -640,9 +755,10 @@ class AdminEstudiantesComponent implements OnInit {
       email: this.nuevoEmail.trim(),
       telefono: this.nuevoTel,
       password: this.nuevaPassword,
-    } }, 30000).then(() => {
+    } }).then(r => {
       this.creando = false;
-      this.notif(`Usuario «${usuario}» creado (${rol}). Contraseña: ${this.verPassword ? this.nuevaPassword : 'la ingresada'}`);
+      this.notif(r === 'en_cola' ? `${EN_COLA} Contraseña de «${usuario}»: ${this.verPassword ? this.nuevaPassword : 'la ingresada'}`
+        : `Usuario «${usuario}» creado (${rol}). Contraseña: ${this.verPassword ? this.nuevaPassword : 'la ingresada'}`);
       this.nuevoRegistro=''; this.nuevoUsuario=''; this.nuevoNombre=''; this.nuevoEmail=''; this.nuevoTel=''; this.nuevaPassword=''; this.verPassword = false;
       this.load();
     }).catch(e => { this.creando = false; this.notif('Error: ' + e.message, 'err'); });
@@ -651,9 +767,10 @@ class AdminEstudiantesComponent implements OnInit {
   asignarBeca() {
     const est = this.seleccionado();
     if (!est) return;
-    gql('mutation($id: ID!, $t: String!, $m: Int!) { asignarBeca(estudianteId: $id, tipo: $t, mesesVigencia: $m) }',
-      { id: est.id, t: this.nuevoTipoBeca, m: Number(this.nuevoMesesVig) }, 15000)
-      .then(() => { this.notif(`Beca ${this.nuevoTipoBeca} asignada a ${est.nombre}`); this.becaMap.update(m => { const x = { ...m }; delete x[est.id]; return x; }); this.elegir(est); this.load(); })
+    ejecutarOEncolar(`Beca ${this.nuevoTipoBeca} para ${est.nombre}`,
+      'mutation($id: ID!, $t: String!, $m: Int!) { asignarBeca(estudianteId: $id, tipo: $t, mesesVigencia: $m) }',
+      { id: est.id, t: this.nuevoTipoBeca, m: Number(this.nuevoMesesVig) })
+      .then(r => { if (r === 'en_cola') { this.notif(EN_COLA); return; } this.notif(`Beca ${this.nuevoTipoBeca} asignada a ${est.nombre}`); this.becaMap.update(m => { const x = { ...m }; delete x[est.id]; return x; }); this.elegir(est); this.load(); })
       .catch(e => this.notif('Error: ' + e.message, 'err'));
   }
 }
@@ -761,27 +878,30 @@ class AdminOperacionComponent implements OnInit {
   publicarMenu() {
     const platos = this.menuPlatos.filter(p => p.id).map(p => ({ platoId: p.id, cupo: Number(p.cupo) }));
     if (platos.length === 0) return this.notif('Debe agregar al menos un plato', 'err');
-    gql('mutation($f: String!, $t: String!, $p: [PlatoIn!]!) { publicarMenu(fecha: $f, turno: $t, platos: $p) }',
-      { f: this.menuFecha, t: this.menuTurno, p: platos }, 15000)
-      .then(() => { this.notif('Menú publicado'); this.menuPlatos = [{ id: '', cupo: 50 }]; })
+    ejecutarOEncolar(`Publicar menú ${this.menuTurno.toLowerCase()} del ${this.menuFecha}`,
+      'mutation($f: String!, $t: String!, $p: [PlatoIn!]!) { publicarMenu(fecha: $f, turno: $t, platos: $p) }',
+      { f: this.menuFecha, t: this.menuTurno, p: platos })
+      .then(r => { this.notif(r === 'en_cola' ? EN_COLA : 'Menú publicado'); this.menuPlatos = [{ id: '', cupo: 50 }]; })
       .catch(e => this.notif('Error: ' + e.message, 'err'));
   }
   recibirLote() {
     const loteId = 'lote-' + Date.now();
     const insumo = this.insumos().find(i => i.id === this.insSel);
     const unidad = insumo?.unidad || 'kg';
-    gql('mutation($i: ID!, $l: String!, $c: Float!, $u: String!, $v: String!) { registrarLote(insumoId: $i, loteId: $l, cantidad: $c, unidad: $u, vence: $v) }', {
+    ejecutarOEncolar(`Recibir ${Number(this.loteCant)} ${unidad} de ${insumo?.nombre || this.insSel}`,
+      'mutation($i: ID!, $l: String!, $c: Float!, $u: String!, $v: String!) { registrarLote(insumoId: $i, loteId: $l, cantidad: $c, unidad: $u, vence: $v) }', {
       i: this.insSel, l: loteId, c: Number(this.loteCant), u: unidad,
       v: this.loteVence || new Date(Date.now()+30*24*3600*1000).toISOString().slice(0,10)
-    }, 15000)
-      .then(() => { this.notif('Lote registrado'); this.loteCant = null; this.loteProv = ''; this.load(); })
+    })
+      .then(r => { this.notif(r === 'en_cola' ? EN_COLA : 'Lote registrado'); this.loteCant = null; this.loteProv = ''; this.load(); })
       .catch(e => this.notif('Error: ' + e.message, 'err'));
   }
   crearInsumo() {
     const id = this.insNuevoNombre.toUpperCase().replace(/\s+/g, '_');
-    gql('mutation($id: ID!, $n: String!, $u: String!, $m: Float!) { crearInsumo(id: $id, nombre: $n, unidad: $u, stockMinimo: $m) }',
-      { id, n: this.insNuevoNombre, u: this.insNuevaUnidad, m: Number(this.insNuevoMin) }, 15000)
-      .then(() => { this.notif('Insumo creado'); this.insNuevoNombre = ''; this.load(); })
+    ejecutarOEncolar(`Crear insumo ${this.insNuevoNombre}`,
+      'mutation($id: ID!, $n: String!, $u: String!, $m: Float!) { crearInsumo(id: $id, nombre: $n, unidad: $u, stockMinimo: $m) }',
+      { id, n: this.insNuevoNombre, u: this.insNuevaUnidad, m: Number(this.insNuevoMin) })
+      .then(r => { this.notif(r === 'en_cola' ? EN_COLA : 'Insumo creado'); this.insNuevoNombre = ''; this.load(); })
       .catch(e => this.notif('Error: ' + e.message, 'err'));
   }
 }
@@ -1190,9 +1310,51 @@ class AgentesComponent implements OnInit, OnDestroy {
   }
 }
 
+// =================== ESTADO DE CONEXIÓN Y COLA ===================
+@Component({
+  standalone: true, selector: 'app-sincronizacion', imports: [CommonModule],
+  template: `
+    <div class="rounded-lg border px-3 py-2 text-xs"
+      [class]="enLinea() ? 'border-slate-700 bg-slate-800/60' : 'border-amber-500/40 bg-amber-500/10'">
+      <div class="flex items-center justify-between gap-2">
+        <span class="font-semibold" [class]="enLinea() ? 'text-emerald-400' : 'text-amber-400'">{{ enLinea() ? '● En línea' : '● Sin conexión' }}</span>
+        <button *ngIf="cola().length" (click)="abierto = !abierto" class="text-slate-300 hover:text-white underline-offset-2 hover:underline">
+          {{ pendientes() ? pendientes() + ' por enviar' : 'Al día' }}{{ errores() ? ' · ' + errores() + ' con error' : '' }}
+        </button>
+      </div>
+      <ul *ngIf="abierto" class="mt-2 space-y-1.5 max-h-64 overflow-auto">
+        <li *ngFor="let o of cola().slice().reverse()" class="border-t border-slate-700/60 pt-1.5">
+          <div class="flex items-start justify-between gap-2">
+            <span class="text-slate-200">{{ o.descripcion }}</span>
+            <span class="shrink-0 px-1.5 rounded border" [class]="color(o.estado)">{{ o.estado }}</span>
+          </div>
+          <div *ngIf="o.error && o.estado !== 'sincronizada'" class="text-slate-400 mt-0.5">{{ o.error }}</div>
+          <div *ngIf="o.estado === 'error'" class="flex gap-3 mt-1">
+            <button (click)="reintentar(o.id)" class="text-cyan-400 hover:underline">Reintentar</button>
+            <button (click)="quitar(o.id)" class="text-slate-400 hover:underline">Descartar</button>
+          </div>
+        </li>
+      </ul>
+    </div>
+  `,
+})
+class SincronizacionComponent {
+  cola = cola;
+  enLinea = enLinea;
+  abierto = false;
+  pendientes = computed(() => cola().filter((o) => o.estado === 'pendiente').length);
+  errores = computed(() => cola().filter((o) => o.estado === 'error').length);
+  reintentar = reintentarOp;
+  quitar = quitarOp;
+  color(e: string) {
+    return e === 'sincronizada' ? 'text-emerald-400 border-emerald-500/40'
+      : e === 'error' ? 'text-red-400 border-red-500/40' : 'text-amber-400 border-amber-500/40';
+  }
+}
+
 // =================== LAYOUT ===================
 @Component({
-  standalone: true, selector: 'app-root', imports: [RouterOutlet, RouterLink, RouterLinkActive, CommonModule],
+  standalone: true, selector: 'app-root', imports: [RouterOutlet, RouterLink, RouterLinkActive, CommonModule, SincronizacionComponent],
   template: `
     <div *ngIf="!loggedIn()" class="min-h-screen">
       <ng-container *ngIf="embedded; else noemb">
@@ -1247,6 +1409,7 @@ class AgentesComponent implements OnInit, OnDestroy {
           </ng-container>
         </nav>
         <div class="p-4 border-t border-slate-800">
+          <app-sincronizacion class="block mb-2" />
           <div class="bg-slate-800/60 rounded-lg p-3 mb-2">
             <div class="text-xs text-slate-400 uppercase tracking-wider">Sesión</div>
             <div class="text-sm text-white font-medium mt-1">{{ user }}</div>
@@ -1265,6 +1428,7 @@ class AgentesComponent implements OnInit, OnDestroy {
           <a *ngIf="verAdminEstudiantes" routerLink="/admin/estudiantes" routerLinkActive="text-white border-orange-500" class="px-4 py-3 text-sm text-slate-400 hover:text-white border-b-2 border-transparent whitespace-nowrap">Estudiantes y becas</a>
           <a *ngIf="verAdminOperacion" routerLink="/admin/operacion" routerLinkActive="text-white border-orange-500" class="px-4 py-3 text-sm text-slate-400 hover:text-white border-b-2 border-transparent whitespace-nowrap">Publicación y recepciones</a>
           <a *ngIf="verAgentes" routerLink="/agentes" routerLinkActive="text-white border-orange-500" class="px-4 py-3 text-sm text-slate-400 hover:text-white border-b-2 border-transparent whitespace-nowrap">Agentes</a>
+          <app-sincronizacion class="ml-auto self-center py-1.5 shrink-0" />
         </nav>
         <div [class]="embedded ? 'p-6' : 'p-8'">
           <router-outlet />
@@ -1348,7 +1512,15 @@ window.addEventListener('message', (ev: MessageEvent) => {
   }
 });
 
-esperarSSOEmbebido().then(() => {
+// PWA: el service worker deja la app disponible sin internet; la conexión se vigila para enviar la cola.
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+window.addEventListener('online', () => { enLinea.set(true); sincronizarCola(); });
+window.addEventListener('offline', () => enLinea.set(false));
+setInterval(() => { if (navigator.onLine) sincronizarCola(); }, 30000);
+
+Promise.all([esperarSSOEmbebido(), cargarAlmacen()]).then(() => {
+  cola.set(LS.get<Operacion[]>('cola', []));
+  sincronizarCola();
   bootstrapApplication(AppComponent, {
     providers: [
       provideRouter([
