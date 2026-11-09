@@ -1,26 +1,30 @@
 'use client';
-// Generador de reportes por texto o por voz (mismo motor que la app móvil): el pedido en español se convierte en una consulta
-// estructurada sobre un catálogo fijo de datos (nunca SQL libre), se ejecuta en el navegador con la copia de datos del rol y
-// se muestra como tabla y gráfico, exportable a PDF, Excel y CSV. Con la copia guardada funciona también sin internet.
+// Reportes por texto o por voz. El pedido en español se manda al backend (POST /reportes/consulta), que lo interpreta,
+// lo ejecuta contra los datos de tu rol y devuelve tabla, gráfico y resumen. Aquí solo se pinta y se exporta.
+// El motor es el MISMO para el portal, este panel y la app móvil: vive una sola vez, en ia-ml-service.
 import { useEffect, useRef, useState } from 'react';
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Card } from '../components/Charts';
-import { DATASETS, columna } from '../lib/reportes/catalogo';
-import { interpretar } from '../lib/reportes/lenguaje';
-import { ejecutar, fmtValor, medidaInfo } from '../lib/reportes/motor';
-import { dmyIso } from '../lib/reportes/fechas';
-import { aCsv, aHtml, aXlsxBase64, nombreArchivo } from '../lib/reportes/exportar';
-import { descargarSnapshot, guardar, leerGuardado, Snapshot } from '../lib/reportes/datos';
+import { API } from '../lib/vivo';
+import { aCsv, aHtml, aXlsxBase64, dmyIso, fmtValor, nombreArchivo } from '../lib/reportes/exportar';
+import { guardar, leerGuardado, token } from '../lib/reportes/datos';
 import { crearDictado, vozDisponible, Dictado } from '../lib/reportes/voz';
 
 const FORMATOS: [string, string][] = [['pantalla', 'Pantalla'], ['pdf', 'PDF'], ['excel', 'Excel'], ['csv', 'CSV']];
-const EJEMPLOS = ['Total cobrado por mes en Excel', 'Los 5 platos más reservados de este mes', 'Pagos mayores a 5 bolivianos de noviembre ordenados por monto descendente en PDF',
-  'Reservas de almuerzo por semana de los últimos 30 días', 'Estudiantes sin beca ordenados por nombre', 'Insumos con stock bajo', 'Promedio de desperdicio por plato'];
 const POR: [string, string][] = [['dia', 'Día'], ['semana', 'Semana'], ['mes', 'Mes'], ['anio', 'Año']];
 const PALETA = ['#f97316', '#06b6d4', '#8b5cf6', '#10b981', '#ef4444', '#eab308'];
 const MAX_FILAS_TABLA = 300;
 
-const hora = (iso?: string) => { if (!iso) return ''; const d = new Date(iso); const p = (n: number) => String(n).padStart(2, '0'); return `${p(d.getDate())}/${p(d.getMonth() + 1)} ${p(d.getHours())}:${p(d.getMinutes())}`; };
+type Columna = { key: string; label: string; tipo: string; fmt?: string };
+type Reporte = {
+  titulo: string; dataset: string; datasetEtiqueta: string; modo: string;
+  columnas: Columna[]; filas: any[]; totales: Record<string, number> | null;
+  grafico: { tipo: string; x: string; y: string[]; etiquetas: Record<string, string> } | null;
+  resumen: string[]; condiciones: string[]; notas: string[];
+  registrosAnalizados: number; totalFilas: number; mostradas: number; generado: string;
+  spec: any; entendi: string; confianza?: number;
+};
+type DatasetAyuda = { id: string; etiqueta: string; descripcion: string; columnas: Columna[]; ejemplos: string[] };
 
 function Chip({ texto, activo, onClick }: { texto: string; activo?: boolean; onClick: () => void }) {
   return <button onClick={onClick} className={'px-3 py-1 rounded-full text-xs border transition ' + (activo ? 'bg-orange-500/20 border-orange-500 text-orange-300' : 'bg-slate-800 border-slate-700 text-slate-300 hover:border-slate-500')}>{texto}</button>;
@@ -33,7 +37,7 @@ function descargar(blob: Blob, nombre: string) {
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
-async function exportar(res: any, formato: string) {
+async function exportar(res: Reporte, formato: string) {
   if (formato === 'csv') return descargar(new Blob([aCsv(res)], { type: 'text/csv;charset=utf-8' }), nombreArchivo(res.titulo, 'csv'));
   if (formato === 'excel') {
     const XLSX: any = await import('xlsx');
@@ -51,7 +55,19 @@ async function exportar(res: any, formato: string) {
   }
 }
 
-function Grafica({ res }: { res: any }) {
+async function pedir(ruta: string, cuerpo: any) {
+  const t = token();
+  const r = await fetch(`${API}/reportes/${ruta}`, {
+    method: 'POST', cache: 'no-store',
+    headers: { 'content-type': 'application/json', ...(t ? { Authorization: `Bearer ${t}` } : {}) },
+    body: JSON.stringify(cuerpo),
+  });
+  const j = await r.json().catch(() => null);
+  if (!r.ok) throw new Error(j?.detail || `El servidor respondió ${r.status}`);
+  return j as Reporte;
+}
+
+function Grafica({ res }: { res: Reporte }) {
   const g = res.grafico;
   if (!g || !res.filas.length || res.filas.length > 40) return null;
   const datos = res.filas.map((f: any) => ({ x: String(f[g.x] ?? ''), ...Object.fromEntries(g.y.map((k: string) => [k, Number(f[k]) || 0])) }));
@@ -77,24 +93,24 @@ function Grafica({ res }: { res: any }) {
   );
 }
 
-function Tabla({ res }: { res: any }) {
-  const celda = (v: any, c: any) => (v === null || v === undefined ? '—' : typeof v === 'number' ? fmtValor(v, c.fmt) : dmyIso(v));
+function Tabla({ res }: { res: Reporte }) {
+  const celda = (v: any, c: Columna) => (v === null || v === undefined ? '—' : typeof v === 'number' ? fmtValor(v, c.fmt) : dmyIso(v));
   if (!res.filas.length) return <p className="text-slate-400 text-sm">No hay datos que cumplan estas condiciones.</p>;
   return (
     <div className="overflow-auto max-h-[28rem] rounded-lg border border-slate-800">
       <table className="w-full text-sm">
         <thead className="sticky top-0 bg-slate-800 text-slate-200">
-          <tr>{res.columnas.map((c: any) => <th key={c.key} className={'px-3 py-2 font-semibold whitespace-nowrap ' + (c.tipo === 'numero' ? 'text-right' : 'text-left')}>{c.label}</th>)}</tr>
+          <tr>{res.columnas.map(c => <th key={c.key} className={'px-3 py-2 font-semibold whitespace-nowrap ' + (c.tipo === 'numero' ? 'text-right' : 'text-left')}>{c.label}</th>)}</tr>
         </thead>
         <tbody>
           {res.filas.slice(0, MAX_FILAS_TABLA).map((f: any, i: number) => (
             <tr key={i} className="border-t border-slate-800 odd:bg-slate-900/40">
-              {res.columnas.map((c: any) => <td key={c.key} className={'px-3 py-1.5 whitespace-nowrap ' + (c.tipo === 'numero' ? 'text-right tabular-nums' : '')}>{celda(f[c.key], c)}</td>)}
+              {res.columnas.map(c => <td key={c.key} className={'px-3 py-1.5 whitespace-nowrap ' + (c.tipo === 'numero' ? 'text-right tabular-nums' : '')}>{celda(f[c.key], c)}</td>)}
             </tr>
           ))}
           {res.totales && (
             <tr className="border-t-2 border-slate-600 bg-orange-500/10 font-semibold">
-              {res.columnas.map((c: any, j: number) => <td key={c.key} className={'px-3 py-2 ' + (c.tipo === 'numero' ? 'text-right tabular-nums' : '')}>{j === 0 ? 'TOTAL' : c.key in res.totales ? celda(res.totales[c.key], c) : ''}</td>)}
+              {res.columnas.map((c, j) => <td key={c.key} className={'px-3 py-2 ' + (c.tipo === 'numero' ? 'text-right tabular-nums' : '')}>{j === 0 ? 'TOTAL' : c.key in res.totales! ? celda(res.totales![c.key], c) : ''}</td>)}
             </tr>
           )}
         </tbody>
@@ -105,45 +121,31 @@ function Tabla({ res }: { res: any }) {
 }
 
 export function ReportesIA() {
-  const [datos, setDatos] = useState<Snapshot | null>(null);
-  const [sincronizando, setSincronizando] = useState(false);
-  const [errorSync, setErrorSync] = useState('');
-  const [enLinea, setEnLinea] = useState(true);
   const [texto, setTexto] = useState('');
   const [formato, setFormato] = useState('pantalla');
-  const [spec, setSpec] = useState<any>(null);
-  const [entendi, setEntendi] = useState('');
-  const [notas, setNotas] = useState<string[]>([]);
-  const [res, setRes] = useState<any>(null);
+  const [res, setRes] = useState<Reporte | null>(null);
   const [error, setError] = useState('');
   const [aviso, setAviso] = useState('');
   const [cargando, setCargando] = useState(false);
   const [escuchando, setEscuchando] = useState(false);
   const [historial, setHistorial] = useState<string[]>([]);
+  const [ayuda, setAyuda] = useState<DatasetAyuda[]>([]);
   const [hayVoz, setHayVoz] = useState(false);
+  const [sinConexion, setSinConexion] = useState(false);
   const dictado = useRef<Dictado | null>(null);
   const generarRef = useRef<(t: string) => void>(() => {});
 
-  // copia guardada (sin conexión) y, si hay red, una descarga fresca
-  const sincronizar = async () => {
-    setSincronizando(true); setErrorSync('');
-    try { setDatos(await descargarSnapshot()); }
-    catch (e: any) { setErrorSync(navigator.onLine ? `No pude actualizar los datos (${e.message || e}). Se usa la última copia guardada.` : 'Sin conexión: se usa la última copia guardada.'); }
-    finally { setSincronizando(false); }
-  };
   useEffect(() => {
     setHayVoz(vozDisponible());
-    setEnLinea(navigator.onLine);
-    const on = () => setEnLinea(true), off = () => setEnLinea(false);
-    window.addEventListener('online', on); window.addEventListener('offline', off);
-    leerGuardado<Snapshot>('snapshot').then(g => { if (g) setDatos(g); sincronizar(); });
     leerGuardado<string[]>('historial').then(h => h && setHistorial(h));
-    return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off); };
+    leerGuardado<Reporte>('ultimo').then(r => r && setRes(r));            // lo último visto, por si el servidor no responde
+    fetch(`${API}/reportes/catalogo`, { cache: 'no-store', headers: token() ? { Authorization: `Bearer ${token()}` } : {} })
+      .then(r => r.json()).then(j => setAyuda(j.datasets || [])).catch(() => {});
   }, []);
 
   const recordar = (t: string) => { const h = [t, ...historial.filter(x => x !== t)].slice(0, 8); setHistorial(h); guardar('historial', h); };
 
-  const bajar = async (r: any, f: string) => {
+  const bajar = async (r: Reporte, f: string) => {
     setAviso(`Generando ${f === 'excel' ? 'Excel' : f.toUpperCase()}…`);
     try { await exportar(r, f); setAviso(f === 'pdf' ? 'Se abrió la impresión: elige «Guardar como PDF».' : `Listo: ${f === 'excel' ? 'Excel' : 'CSV'} descargado.`); }
     catch (e: any) { setAviso(''); setError('No pude generar el archivo: ' + (e.message || e)); }
@@ -152,26 +154,26 @@ export function ReportesIA() {
   const generar = (t?: string, opc: { continuar?: boolean; fmt?: string } = {}) => {
     const q = (t === undefined ? texto : t).trim();
     if (!q) return;
-    const continuar = opc.continuar !== false;
     setError(''); setAviso(''); setCargando(true);
-    setTimeout(async () => {                       // deja pintar el indicador antes de calcular
-      try {
-        if (!datos) throw new Error('Todavía no hay datos. Conéctate a la red del comedor y toca «Actualizar datos».');
-        const i = interpretar(q, { previa: continuar ? spec : null, tablas: datos.datasets });
-        const r = ejecutar(i.spec, datos.datasets);
-        setSpec(i.spec); setEntendi(i.entendi); setNotas(i.notas); setRes(r);
-        const f = opc.fmt || (i.spec.salida !== 'pantalla' ? i.spec.salida : formato);
+    pedir('consulta', { texto: q, previa: opc.continuar === false ? null : res?.spec })
+      .then(async r => {
+        setRes(r); setSinConexion(false); guardar('ultimo', r); recordar(q);
+        const f = opc.fmt || (r.spec?.salida && r.spec.salida !== 'pantalla' ? r.spec.salida : formato);
         setFormato(f);
-        recordar(q);
         if (f !== 'pantalla') await bajar(r, f);
-      } catch (e: any) { setError(e.message || String(e)); }
-      finally { setCargando(false); }
-    }, 40);
+      })
+      .catch(e => { setError(e.message || String(e)); setSinConexion(!navigator.onLine); })
+      .finally(() => setCargando(false));
   };
   generarRef.current = (t: string) => generar(t);
 
-  const aplicar = (nuevo: any) => {                // ajustes rápidos sobre la consulta actual
-    try { setRes(ejecutar(nuevo, datos!.datasets)); setSpec(nuevo); setError(''); } catch (e: any) { setError(e.message || String(e)); }
+  // Los ajustes rápidos reejecutan la misma consulta en el servidor, con el spec cambiado
+  const aplicar = (nuevo: any) => {
+    setCargando(true); setError('');
+    pedir('ejecutar', { spec: nuevo })
+      .then(r => { setRes({ ...r, entendi: res?.entendi || '' }); guardar('ultimo', r); })
+      .catch(e => setError(e.message || String(e)))
+      .finally(() => setCargando(false));
   };
 
   const alternarMic = () => {
@@ -187,33 +189,26 @@ export function ReportesIA() {
     try { dictado.current?.iniciar(); setEscuchando(true); } catch { setEscuchando(false); }
   };
 
-  const ds = spec ? (DATASETS as any)[spec.dataset] : null;
-  const agrupado = !!(spec && (spec.agrupar || []).length);
-  const ordenar = (dir: string) => {
-    const col = agrupado || (spec.medidas || []).length
-      ? medidaInfo(spec.dataset, (spec.medidas || [])[0] || { fn: 'count' }).key
-      : ds.columnas.find((c: any) => c.tipo === 'numero')?.nombre;
-    if (col) aplicar({ ...spec, orden: [{ col, dir }] });
-  };
+  const spec = res?.spec;
+  const agrupado = !!(spec?.agrupar?.length);
+  const ds = ayuda.find(a => a.id === res?.dataset);
+  const colFecha = ds?.columnas.find(c => c.tipo === 'fecha')?.key;
+  const ejemplos = ayuda.flatMap(a => a.ejemplos).slice(0, 7);
 
   return (
     <div className="px-8 pb-10 space-y-6 max-w-5xl">
       <div className="flex flex-wrap items-center gap-3 text-xs">
-        <span className={'px-2.5 py-1 rounded border font-medium ' + (enLinea ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-400' : 'bg-amber-500/10 border-amber-500/40 text-amber-400')}>
-          {enLinea ? 'En línea' : 'Sin conexión'} · {datos ? `datos del ${hora(datos.descargado)}` : 'todavía no hay datos descargados'}
+        <span className={'px-2.5 py-1 rounded border font-medium ' + (sinConexion ? 'bg-amber-500/10 border-amber-500/40 text-amber-400' : 'bg-emerald-500/10 border-emerald-500/40 text-emerald-400')}>
+          {sinConexion ? 'Sin conexión · se muestra el último reporte' : 'Conectado al servidor'}
         </span>
-        <button onClick={sincronizar} disabled={sincronizando} className="px-3 py-1 rounded-lg border border-slate-700 bg-slate-800 text-cyan-300 disabled:opacity-50">
-          {sincronizando ? 'Actualizando…' : '↻ Actualizar datos'}
-        </button>
-        <span className="text-slate-500">Los reportes se calculan en tu navegador con una copia de los datos de tu rol: funcionan también sin internet.</span>
+        <span className="text-slate-500">El pedido lo interpreta el servidor y solo consulta los datos que tu rol permite.</span>
       </div>
-      {errorSync && <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-amber-200 text-sm">{errorSync}</div>}
 
       <Card title="Pide tu reporte" subtitle="Escríbelo o dilo con el micrófono, en español normal">
-        {spec && (
+        {res && (
           <div className="mb-3 rounded-lg border border-cyan-500/30 bg-cyan-500/10 p-3 text-xs text-cyan-200">
             Continúas el reporte anterior: di «ahora por mes», «solo de almuerzo», «en Excel»…{' '}
-            <button className="font-bold text-cyan-300 underline" onClick={() => { setSpec(null); setRes(null); setEntendi(''); setNotas([]); setAviso(''); }}>Nuevo reporte</button>
+            <button className="font-bold text-cyan-300 underline" onClick={() => { setRes(null); setAviso(''); }}>Nuevo reporte</button>
           </div>
         )}
         <div className="flex gap-3">
@@ -246,35 +241,33 @@ export function ReportesIA() {
         )}
       </Card>
 
-      {res && spec && ds && (
+      {res && (
         <>
           <Card title="Así lo entendí">
-            <p className="text-white text-sm mb-2">{entendi}</p>
-            {notas.map((n, i) => <p key={i} className="text-amber-300 text-xs">• {n}</p>)}
+            <p className="text-white text-sm mb-2">{res.entendi}</p>
+            {res.notas?.map((n, i) => <p key={i} className="text-amber-300 text-xs">• {n}</p>)}
             <div className="flex flex-wrap gap-2 mt-3">
-              {(spec.filtros || []).map((f: any, i: number) => (
+              {(spec?.filtros || []).map((f: any, i: number) => (
                 <Chip key={i} onClick={() => aplicar({ ...spec, filtros: spec.filtros.filter((_: any, k: number) => k !== i) })}
-                  texto={`${(columna(spec.dataset, f.col) || { etiqueta: f.col }).etiqueta} ${f.op === 'dia_semana' ? 'ciertos días' : f.op} ${Array.isArray(f.valor) ? f.valor.join('–') : String(f.valor)}  ✕`} />
+                  texto={`${f.col} ${f.op} ${Array.isArray(f.valor) ? f.valor.join('–') : String(f.valor)}  ✕`} />
               ))}
-              {spec.fecha && <Chip onClick={() => aplicar({ ...spec, fecha: null })} texto={`Período: ${spec.fecha.etiqueta}  ✕`} />}
+              {spec?.fecha && <Chip onClick={() => aplicar({ ...spec, fecha: null })} texto={`Período: ${spec.fecha.etiqueta}  ✕`} />}
             </div>
             <div className="text-xs text-slate-400 mt-3 mb-1">Agrupar</div>
             <div className="flex flex-wrap gap-2">
               <Chip texto="Sin agrupar" activo={!agrupado} onClick={() => aplicar({ ...spec, agrupar: [], medidas: [], columnas: null, orden: [] })} />
-              {ds.fecha && POR.map(([k, n]) => <Chip key={k} texto={n} activo={agrupado && spec.agrupar[0].por === k} onClick={() => aplicar({ ...spec, agrupar: [{ col: ds.fecha, por: k }], columnas: null, orden: [] })} />)}
-              {ds.columnas.filter((c: any) => c.tipo === 'categoria').map((c: any) => <Chip key={c.nombre} texto={c.etiqueta} activo={agrupado && spec.agrupar[0].col === c.nombre && !spec.agrupar[0].por} onClick={() => aplicar({ ...spec, agrupar: [{ col: c.nombre }], columnas: null, orden: [] })} />)}
+              {colFecha && POR.map(([k, n]) => <Chip key={k} texto={n} activo={agrupado && spec.agrupar[0].por === k} onClick={() => aplicar({ ...spec, agrupar: [{ col: colFecha, por: k }], columnas: null, orden: [] })} />)}
+              {(ds?.columnas || []).filter(c => c.tipo === 'categoria').map(c => <Chip key={c.key} texto={c.label} activo={agrupado && spec.agrupar[0].col === c.key && !spec.agrupar[0].por} onClick={() => aplicar({ ...spec, agrupar: [{ col: c.key }], columnas: null, orden: [] })} />)}
             </div>
-            <div className="text-xs text-slate-400 mt-3 mb-1">Orden y cantidad</div>
+            <div className="text-xs text-slate-400 mt-3 mb-1">Cantidad</div>
             <div className="flex flex-wrap gap-2">
-              <Chip texto="↓ Mayor a menor" activo={!!(spec.orden || []).find((o: any) => o.dir === 'desc')} onClick={() => ordenar('desc')} />
-              <Chip texto="↑ Menor a mayor" activo={!!(spec.orden || []).find((o: any) => o.dir === 'asc')} onClick={() => ordenar('asc')} />
-              {[5, 10, 20].map(n => <Chip key={n} texto={`Primeros ${n}`} activo={spec.limite === n} onClick={() => aplicar({ ...spec, limite: n })} />)}
-              <Chip texto="Todos" activo={!spec.limite} onClick={() => aplicar({ ...spec, limite: null })} />
+              {[5, 10, 20].map(n => <Chip key={n} texto={`Primeros ${n}`} activo={spec?.limite === n} onClick={() => aplicar({ ...spec, limite: n })} />)}
+              <Chip texto="Todos" activo={!spec?.limite} onClick={() => aplicar({ ...spec, limite: null })} />
             </div>
           </Card>
 
           <Card title={res.titulo} subtitle={`${res.datasetEtiqueta} · ${res.generado}`}>
-            {res.resumen.map((l: string, i: number) => <p key={i} className="text-sm text-slate-300">{l}</p>)}
+            {res.resumen.map((l, i) => <p key={i} className="text-sm text-slate-300">{l}</p>)}
             <div className="flex gap-2 my-4">
               {[['pdf', 'PDF'], ['excel', 'Excel'], ['csv', 'CSV']].map(([k, n]) => (
                 <button key={k} onClick={() => bajar(res, k)} className="px-4 py-1.5 rounded-lg border border-slate-700 bg-slate-800 text-sm text-slate-100 hover:border-orange-500">⬇ {n}</button>
@@ -289,15 +282,15 @@ export function ReportesIA() {
       {!res && (
         <>
           <Card title="Pruébalo">
-            <div className="flex flex-wrap gap-2">{EJEMPLOS.map(e => <Chip key={e} texto={e.length > 60 ? e.slice(0, 59) + '…' : e} onClick={() => { setTexto(e); generar(e, { continuar: false }); }} />)}</div>
+            <div className="flex flex-wrap gap-2">{ejemplos.map(e => <Chip key={e} texto={e.length > 60 ? e.slice(0, 59) + '…' : e} onClick={() => { setTexto(e); generar(e, { continuar: false }); }} />)}</div>
           </Card>
           <Card title="¿Qué puedo pedir?">
-            {Object.entries(DATASETS as Record<string, any>).filter(([id]) => !datos || datos.datasets[id]).map(([id, d]) => (
-              <div key={id} className="mb-4">
+            {ayuda.map(d => (
+              <div key={d.id} className="mb-4">
                 <div className="text-white font-semibold text-sm">{d.etiqueta}</div>
                 <div className="text-slate-400 text-xs mb-1">{d.descripcion}</div>
-                <div className="text-slate-500 text-xs">{d.columnas.map((c: any) => c.etiqueta).join(' · ')}</div>
-                {d.ejemplos.slice(0, 2).map((e: string) => <button key={e} className="block text-cyan-300 text-xs mt-1 text-left" onClick={() => { setTexto(e); generar(e, { continuar: false }); }}>› {e}</button>)}
+                <div className="text-slate-500 text-xs">{d.columnas.map(c => c.label).join(' · ')}</div>
+                {d.ejemplos.slice(0, 2).map(e => <button key={e} className="block text-cyan-300 text-xs mt-1 text-left" onClick={() => { setTexto(e); generar(e, { continuar: false }); }}>› {e}</button>)}
               </div>
             ))}
             <p className="text-slate-500 text-xs leading-relaxed">

@@ -44,15 +44,41 @@ function useSSO() {
 
 type Tab = 'menu' | 'reservas' | 'perfil';
 
-type Reserva = {
-  plato: string; fecha: string; turno: string;
-  reservaId: string; status: string;
-  metodo?: string; monto?: number;
-  stripeUrl?: string; qrDataUri?: string; stripeRef?: string; payQr?: string;
-  pagadaAt?: string; createdAt: string;
+type ReservaSrv = { id: string; platoId: string; fecha: string; turno: string; estado: string; qr: string | null; creada: string };
+type PagoSrv = { id: string; reservaId: string; monto: number; metodo: string; estado: string; ticketId: string | null; fecha: string };
+type PagoOk = { plato: string; fecha: string; turno: string; monto: number; reservaId: string; qrDataUri?: string; beca?: boolean };
+
+// Precio de una ración por turno (Bs)
+const PRECIO: Record<string, number> = { DESAYUNO: 6, ALMUERZO: 12, CENA: 10 };
+const METODO: Record<string, string> = { qr_bancario: 'QR / tarjeta', efectivo: 'Efectivo', beca: 'Beca comedor' };
+
+// El pago por QR ya iniciado queda guardado para poder continuarlo (o verificarlo) aunque se recargue la página
+const PEND_KEY = (u: string) => `portal.pagos-iniciados.${u || 'anon'}`;
+const leerPend = (u: string): Record<string, any> => { try { return JSON.parse(localStorage.getItem(PEND_KEY(u)) || '{}'); } catch { return {}; } };
+const guardarPend = (u: string, id: string, info: any) => {
+  try { const p = leerPend(u); if (info) p[id] = { ...info, t: Date.now() }; else delete p[id]; localStorage.setItem(PEND_KEY(u), JSON.stringify(p)); } catch { /* sin almacenamiento */ }
 };
 
-const STORAGE_KEY = (u: string) => `portal.reservas.${u || 'anon'}`;
+const esc = (t: any) => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+/** Factura / recibo de una ración pagada, lista para imprimir o guardar como PDF. */
+function facturaHtml(usuario: string, f: { r: ReservaSrv; p: PagoSrv }): string {
+  const numero = 'F-' + String(f.p.ticketId || f.p.id).slice(0, 8).toUpperCase();
+  const monto = f.p.metodo === 'beca' ? 'Bs 0,00 (cubierto por beca)' : 'Bs ' + Number(f.p.monto).toFixed(2).replace('.', ',');
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${numero}</title><style>
+body{font-family:Arial,Helvetica,sans-serif;color:#0f172a;margin:36px;max-width:680px} h1{margin:0;font-size:22px;color:#1e293b} .sub{color:#64748b;font-size:12px;margin:3px 0 20px}
+.num{float:right;text-align:right;font-size:12px;color:#475569} table{width:100%;border-collapse:collapse;margin-top:14px} th{background:#1e293b;color:#fff;text-align:left;padding:8px;font-size:12px}
+td{padding:9px 8px;border-bottom:1px solid #e2e8f0;font-size:13px} .t{text-align:right}.total{font-size:19px;font-weight:bold;text-align:right;margin-top:16px}
+.pie{margin-top:30px;color:#94a3b8;font-size:11px;text-align:center}</style></head><body>
+<div class="num"><b>${numero}</b><br>${esc(new Date(f.p.fecha).toLocaleString('es-BO'))}</div>
+<h1>Comedor Universitario UAGRM</h1><div class="sub">Factura / recibo de ración</div>
+<div><b>Cliente:</b> ${esc(usuario)}</div>
+<table><thead><tr><th>Detalle</th><th>Fecha del servicio</th><th>Turno</th><th class="t">Monto</th></tr></thead>
+<tbody><tr><td>${esc(f.r.platoId)}</td><td>${esc(f.r.fecha)}</td><td>${esc(f.r.turno)}</td><td class="t">${esc(monto)}</td></tr></tbody></table>
+<div class="total">Total: ${esc(monto)}</div>
+<div style="margin-top:16px;font-size:12px;color:#475569">Método de pago: <b>${esc(METODO[f.p.metodo] || f.p.metodo)}</b> · Reserva ${esc(f.r.id)}</div>
+<div class="pie">Documento generado por el portal del estudiante · Comedor Universitario UAGRM</div></body></html>`;
+}
 
 export default function App() {
   const { user } = useSSO();
@@ -61,25 +87,30 @@ export default function App() {
   const [beca, setBeca] = useState<any>(null);
   const [tab, setTab] = useState<Tab>('menu');
   const [reserva, setReserva] = useState<any>(null);
-  const [historial, setHistorial] = useState<Reserva[]>([]);
+  const [reservas, setReservas] = useState<ReservaSrv[]>([]);
+  const [pagos, setPagos] = useState<PagoSrv[]>([]);
+  const [pagando, setPagando] = useState<string | null>(null);
+  const [recarga, setRecarga] = useState(0);
+  const [factura, setFactura] = useState<{ r: ReservaSrv; p: PagoSrv } | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
   const [busqueda, setBusqueda] = useState('');
   const [toast, setToast] = useState<{ msg: string, kind: 'ok' | 'err' } | null>(null);
-  const [pagoOk, setPagoOk] = useState<Reserva | null>(null);
+  const [pagoOk, setPagoOk] = useState<PagoOk | null>(null);
 
-  // Rehidratar historial desde localStorage al cambiar user
-  useEffect(() => {
+  // Las reservas y los pagos salen del servidor (no del navegador): se ven igual desde cualquier dispositivo
+  const cargarReservas = async () => {
     if (!user) return;
     try {
-      const raw = localStorage.getItem(STORAGE_KEY(user));
-      if (raw) setHistorial(JSON.parse(raw));
-    } catch {}
-  }, [user]);
-
-  // Persistir cada cambio
-  useEffect(() => {
-    if (user) try { localStorage.setItem(STORAGE_KEY(user), JSON.stringify(historial)); } catch {}
-  }, [user, historial]);
+      const [r, p] = await Promise.all([
+        axios.get(`${API}/estudiantes/${user}/reservas`),
+        axios.get(`${API}/pagos`, { params: { estudiante: user } }),
+      ]);
+      setReservas(r.data || []); setPagos(p.data || []);
+    } catch { /* sin conexión: se conserva lo que ya se mostraba */ }
+  };
+  useEffect(() => { cargarReservas(); }, [user]);
+  useEffect(() => { if (tab === 'reservas') cargarReservas(); }, [tab]);
+  const recargarMenus = () => setRecarga(n => n + 1);
 
   // Semana actual y la siguiente, solo desde hoy en adelante (no tiene sentido reservar días pasados)
   useEffect(() => {
@@ -89,7 +120,7 @@ export default function App() {
     const proxima = new Date(lunes); proxima.setDate(lunes.getDate() + 7);
     Promise.all([lunes, proxima].map(d => axios.get(`${API}/menus/semana/${turno}`, { params: { inicio: f(d) } }).then(r => r.data as any[]).catch(() => [] as any[])))
       .then(([a, b]) => setMenus([...a, ...b].filter(m => m.fecha >= f(hoy))));
-  }, [turno]);
+  }, [turno, recarga]);
   useEffect(() => { if (user) axios.get(`${API}/estudiantes/${user}/beca`).then(r => setBeca(r.data)).catch(() => {}); }, [user]);
 
   // Un solo bloque por día: se fusionan los menús repetidos y se ordena por fecha.
@@ -118,56 +149,76 @@ export default function App() {
 
   // Se puede reservar más de una ración por día: aquí solo se listan las que ya tiene.
   const reservasDelDia = (fecha: string) =>
-    historial.filter(h => h.fecha === fecha && h.status !== 'CANCELADA');
+    reservas.filter(r => r.fecha === fecha && r.estado !== 'cancelada');
 
   const notif = (msg: string, kind: 'ok' | 'err') => { setToast({ msg, kind }); setTimeout(() => setToast(null), 4000); };
 
+  // Reservar NO cobra: la porción queda apartada y la persona paga después, desde «Mis reservas».
+  // Con beca vigente que cubre la ración queda confirmada de una vez (sin costo).
   const reservar = async (menuId: string, platoId: string, fecha: string, t: string) => {
     setLoading(platoId);
     try {
       const idem = `portal-${user}-${fecha}-${platoId}-${Date.now()}`;  // una clave por intento: permite varias reservas del mismo plato
-      const metodo = beca?.cubreHoy ? 'beca' : 'qr_bancario';
-      const r = await axios.post(`${API}/sagas/reservar-y-pagar`, {
-        estudiante_id: user, menu_id: menuId, plato_id: platoId, fecha, turno: t, metodo_pago: metodo, monto: 10, idempotency_key: idem,
-      });
-      const pendiente = r.data.status === 'PENDING_PAYMENT';
-      const nueva: Reserva = {
-        plato: platoId, fecha, turno: t, reservaId: r.data.reservaId,
-        status: pendiente ? 'PENDIENTE_PAGO' : 'PAGADA',
-        metodo, monto: metodo === 'beca' ? 0 : 10,
-        stripeUrl: r.data.stripe?.paymentUrl,
-        stripeRef: r.data.stripe?.gatewayRef,
-        qrDataUri: r.data.stripe?.qrDataUri,
-        payQr: r.data.qr ? r.data.qr.split('::')[1] : undefined,
-        pagadaAt: pendiente ? undefined : new Date().toISOString(),
-        createdAt: new Date().toISOString(),
-      };
-      setHistorial(h => [nueva, ...h]);
-      if (pendiente) {
-        setReserva(r.data);
+      const r = await axios.post(`${API}/sagas/reservar`, { estudiante_id: user, menu_id: menuId, plato_id: platoId, fecha, turno: t, idempotency_key: idem });
+      if (r.data.status === 'COMPLETED') {
+        setPagoOk({ plato: platoId, fecha, turno: t, monto: 0, beca: true, reservaId: r.data.reservaId, qrDataUri: r.data.qr ? String(r.data.qr).split('::')[1] : undefined });
+        axios.get(`${API}/estudiantes/${user}/beca`).then(b => setBeca(b.data)).catch(() => {});
       } else {
-        setPagoOk({ ...nueva, qrDataUri: nueva.payQr });
+        notif('Reserva creada. Págala cuando quieras en «Mis reservas».', 'ok');
       }
+      cargarReservas(); recargarMenus();
     } catch (e: any) {
       notif(e.response?.data?.detail || e.message, 'err');
     } finally { setLoading(null); }
   };
 
-  const [verificando, setVerificando] = useState(false);
-  const [cargandoFactura, setCargandoFactura] = useState<string | null>(null);
-
-  // Abre la factura/recibo de Stripe de una reserva ya pagada.
-  const verFactura = async (r: Reserva) => {
-    if (!r.stripeRef) return;
-    setCargandoFactura(r.reservaId);
+  // Pagar una reserva pendiente (QR / tarjeta por Stripe). Si ya inició el pago, se continúa el mismo.
+  const pagar = async (r: ReservaSrv) => {
+    setPagando(r.id);
     try {
-      const res = await axios.get(`${API}/pagos/recibo/${r.stripeRef}`);
-      if (res.data?.url) window.open(res.data.url, '_blank', 'noopener');
-      else notif(res.data?.error || 'La factura todavía no está disponible', 'err');
+      const monto = PRECIO[r.turno] ?? 10;
+      const previo = leerPend(user)[r.id];
+      if (previo && Date.now() - previo.t < 20 * 3600 * 1000) { setReserva({ reservaId: r.id, stripe: previo, monto }); return; }
+      const res = await axios.post(`${API}/sagas/pagar`, { reserva_id: r.id, estudiante_id: user, metodo_pago: 'qr_bancario', monto, idempotency_key: `pagar-${r.id}-${Date.now()}` });
+      if (res.data.status === 'PENDING_PAYMENT') { guardarPend(user, r.id, res.data.stripe); setReserva({ reservaId: r.id, stripe: res.data.stripe, monto }); }
+      else { setPagoOk({ plato: r.platoId, fecha: r.fecha, turno: r.turno, monto, reservaId: r.id, qrDataUri: res.data.qr ? String(res.data.qr).split('::')[1] : undefined }); cargarReservas(); }
     } catch (e: any) {
-      notif(e.response?.data?.error || 'No se pudo obtener la factura', 'err');
-    } finally { setCargandoFactura(null); }
+      notif(e.response?.data?.detail || e.message, 'err');
+    } finally { setPagando(null); }
   };
+
+  // Cancelar una reserva que todavía no se pagó: la porción vuelve al cupo
+  const cancelarReserva = async (r: ReservaSrv) => {
+    if (!confirm('¿Cancelar esta reserva? Tu porción se libera.')) return;
+    setPagando(r.id);
+    try {
+      await axios.post(`${API}/sagas/cancelar-reserva`, { reserva_id: r.id });
+      guardarPend(user, r.id, null);
+      notif('Reserva cancelada', 'ok');
+      cargarReservas(); recargarMenus();
+    } catch (e: any) {
+      notif(e.response?.data?.detail || e.message, 'err');
+    } finally { setPagando(null); }
+  };
+
+  // El pago más reciente de la reserva
+  const pagoDe = (r: ReservaSrv): PagoSrv | undefined =>
+    pagos.filter(p => p.reservaId === r.id).sort((a, b) => a.fecha.localeCompare(b.fecha)).pop();
+  const abrirFactura = (r: ReservaSrv) => {
+    const p = pagoDe(r);
+    if (!p) { notif('Todavía no hay factura para esta reserva', 'err'); return; }
+    setFactura({ r, p });
+  };
+  const imprimirFactura = () => {                      // se abre el diálogo de impresión: elige «Guardar como PDF»
+    if (!factura) return;
+    const f = document.createElement('iframe');
+    f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
+    document.body.appendChild(f);
+    f.srcdoc = facturaHtml(user, factura);
+    f.onload = () => { f.contentWindow?.focus(); f.contentWindow?.print(); setTimeout(() => f.remove(), 60000); };
+  };
+
+  const [verificando, setVerificando] = useState(false);
 
   // La reserva solo se confirma cuando el pago está acreditado.
   const confirmarPago = async () => {
@@ -177,15 +228,14 @@ export default function App() {
     try {
       const r = await axios.post(`${API}/sagas/confirmar-pago`, { reserva_id: reserva.reservaId, referencia: ref });
       if (r.data?.confirmada) {
-        const now = new Date().toISOString();
+        const info = reservas.find(x => x.id === reserva.reservaId);
         const qr = r.data.qr ? String(r.data.qr).split('::')[1] : undefined;
-        const base = historial.find(x => x.reservaId === reserva.reservaId);
-        setHistorial(h => h.map(x => x.reservaId === reserva.reservaId
-          ? { ...x, status: 'PAGADA', pagadaAt: now, payQr: qr || x.payQr } : x));
-        if (base) setPagoOk({ ...base, status: 'PAGADA', pagadaAt: now, qrDataUri: qr || base.payQr });
+        guardarPend(user, reserva.reservaId, null);
+        setPagoOk({ plato: info?.platoId || '', fecha: info?.fecha || '', turno: info?.turno || '', monto: reserva.monto ?? PRECIO[info?.turno || ''] ?? 10, reservaId: reserva.reservaId, qrDataUri: qr });
         setReserva(null);
+        cargarReservas();
       } else {
-        notif('El pago todavía no figura como acreditado. Completalo y volvé a verificar.', 'err');
+        notif('El pago todavía no figura como acreditado. Complétalo y vuelve a verificar.', 'err');
       }
     } catch (e: any) {
       notif(e.response?.data?.detail || 'No se pudo verificar el pago', 'err');
@@ -257,16 +307,18 @@ export default function App() {
                       <div className="mb-2 text-xs rounded-lg px-3 py-2 bg-emerald-500/10 border border-emerald-500/40 text-emerald-300">
                         Tus reservas de este día ({delDia.length}):{' '}
                         {delDia.map((r, i) => (
-                          <span key={r.reservaId || i}>{i > 0 ? ', ' : ''}<b>{r.plato}</b>{r.status === 'PAGADA' ? '' : ' (pago pendiente)'}</span>
+                          <span key={r.id}>{i > 0 ? ', ' : ''}<b>{r.platoId}</b>{r.estado === 'pendiente' ? ' (pendiente de pago)' : ''}</span>
                         ))}
                       </div>
                     ) : (
-                      <div className="mb-2 text-xs text-slate-500">Elegí un plato. Puedes reservar más de una ración por día.</div>
+                      <div className="mb-2 text-xs text-slate-500">
+                        {beca?.tieneBeca ? 'Con beca puedes reservar una ración por día, sin costo.' : 'Elige un plato. Puedes reservar varias raciones y pagar cada una después, en «Mis reservas».'}
+                      </div>
                     )}
                     {d.platos.map(p => {
                       const pct = (p.disponibles / p.cupo) * 100;
-                      const veces = delDia.filter(r => r.plato === p.id).length;
-                      const pendiente = delDia.find(r => r.plato === p.id && r.status === 'PENDIENTE_PAGO' && r.stripeUrl);
+                      const veces = delDia.filter(r => r.platoId === p.id).length;
+                      const bloqueadoBeca = !!beca?.tieneBeca && delDia.length > 0;   // la beca cubre una ración por día
                       return (
                         <div key={p.id} className="border-t border-slate-700 pt-3 mt-3">
                           <div className="flex justify-between items-center mb-2">
@@ -275,15 +327,11 @@ export default function App() {
                               <div className="text-xs text-slate-400">{p.disponibles}/{p.cupo} disponibles</div>
                             </div>
                             <button onClick={() => reservar(p.menuId, p.id, d.fecha, d.turno)}
-                              disabled={!p.disponibles || loading === p.id}
+                              disabled={!p.disponibles || loading === p.id || bloqueadoBeca}
                               className={"px-4 py-1.5 rounded-lg text-sm font-medium " +
-                                (!p.disponibles ? "bg-slate-700 text-slate-500" : "bg-gradient-to-r from-orange-500 to-amber-600 text-white")}>
-                              {loading === p.id ? '…' : !p.disponibles ? 'Agotado' : veces > 0 ? 'Reservar otro' : 'Reservar'}
+                                (!p.disponibles || bloqueadoBeca ? "bg-slate-700 text-slate-500" : "bg-gradient-to-r from-orange-500 to-amber-600 text-white")}>
+                              {loading === p.id ? '…' : !p.disponibles ? 'Agotado' : bloqueadoBeca ? 'Ya reservaste hoy' : veces > 0 ? 'Reservar otro' : 'Reservar'}
                             </button>
-                            {pendiente && (
-                              <button onClick={() => setReserva({ reservaId: pendiente.reservaId, stripe: { paymentUrl: pendiente.stripeUrl, qrDataUri: pendiente.qrDataUri, gatewayRef: pendiente.stripeRef } })}
-                                className="ml-2 px-3 py-1.5 rounded-lg text-sm font-medium bg-slate-700 text-slate-200">Continuar pago</button>
-                            )}
                           </div>
                           <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden">
                             <div className="h-full bg-gradient-to-r from-orange-500 to-amber-600" style={{ width: pct + '%' }} />
@@ -301,36 +349,51 @@ export default function App() {
         {tab === 'reservas' && (
           <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-6">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="text-white font-bold">Mis reservas <span className="text-xs text-slate-500 font-normal">({historial.length})</span></h3>
-              <button onClick={() => { if (confirm('¿Borrar todo el historial local?')) { setHistorial([]); localStorage.removeItem(STORAGE_KEY(user)); } }}
-                className="text-xs text-slate-500 hover:text-red-400">Limpiar</button>
+              <h3 className="text-white font-bold">Mis reservas <span className="text-xs text-slate-500 font-normal">({reservas.length})</span></h3>
+              <button onClick={cargarReservas} className="text-xs text-cyan-400 hover:text-cyan-300">↻ Actualizar</button>
             </div>
-            {historial.length === 0 ? <div className="text-center py-8 text-slate-500">Sin reservas. Reservá en Menú.</div> :
+            {reservas.length === 0 ? <div className="text-center py-8 text-slate-500">Sin reservas. Reserva en Menú.</div> :
               <div className="space-y-2">
-                {historial.map((r, i) => {
-                  const esPagada = r.status === 'PAGADA';
+                {reservas.slice(0, 60).map(r => {
+                  const pendiente = r.estado === 'pendiente';
+                  const cancelada = r.estado === 'cancelada';
+                  const pagada = r.estado === 'confirmada' || r.estado === 'consumida';
+                  const p = pagada ? pagoDe(r) : undefined;
+                  const monto = PRECIO[r.turno] ?? 10;
+                  const etiqueta = pendiente ? 'Pendiente de pago' : r.estado === 'consumida' ? 'Servida' : pagada ? 'Pagada' : 'Cancelada';
                   return (
-                    <div key={r.reservaId || i} className="bg-slate-900/50 rounded-lg p-4 flex justify-between items-center">
-                      <div className="flex-1">
-                        <div className="text-white font-medium">{r.plato}</div>
-                        <div className="text-xs text-slate-400">{r.fecha} · {r.turno} · {r.metodo || 'qr_bancario'} · Bs {r.monto || 10}</div>
-                        <code className="text-[10px] text-slate-500 block mt-1">#{r.reservaId?.slice(0, 16)}</code>
+                    <div key={r.id} className={"bg-slate-900/50 rounded-lg p-4 flex justify-between items-center gap-3 " + (cancelada ? 'opacity-60' : '')}>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-white font-medium truncate">{r.platoId}</div>
+                        <div className="text-xs text-slate-400">{r.fecha} · {r.turno} · {pagada ? (p ? (p.metodo === 'beca' ? 'Beca (sin costo)' : `${METODO[p.metodo] || p.metodo} · Bs ${Number(p.monto).toFixed(2)}`) : 'Pagada') : `Bs ${monto}`}</div>
+                        <code className="text-[10px] text-slate-500 block mt-1">#{r.id.slice(0, 16)}</code>
                       </div>
-                      <div className="text-right ml-3">
-                        <span className={"text-xs px-2.5 py-1 rounded-full font-mono " + (esPagada ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400')}>
-                          {esPagada ? 'Pagada' : 'Pendiente'}
-                        </span>
-                        {r.pagadaAt && <div className="text-[10px] text-slate-500 mt-1">pagada {new Date(r.pagadaAt).toLocaleString()}</div>}
-                        {esPagada && r.stripeRef && (
-                          <button onClick={() => verFactura(r)} disabled={cargandoFactura === r.reservaId}
-                            className="mt-2 text-xs px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-600 text-white font-medium">
-                            {cargandoFactura === r.reservaId ? 'Abriendo…' : 'Ver factura Stripe'}
-                          </button>
-                        )}
+                      <div className="text-right">
+                        <span className={"text-xs px-2.5 py-1 rounded-full font-mono " + (pagada ? 'bg-emerald-500/20 text-emerald-400' : pendiente ? 'bg-amber-500/20 text-amber-400' : 'bg-slate-600/40 text-slate-400')}>{etiqueta}</span>
+                        <div className="flex gap-2 justify-end mt-2 flex-wrap">
+                          {pendiente && (
+                            <>
+                              <button onClick={() => pagar(r)} disabled={pagando === r.id}
+                                className="text-xs px-3 py-1.5 rounded-lg bg-gradient-to-r from-orange-500 to-amber-600 disabled:opacity-50 text-white font-medium">
+                                {pagando === r.id ? '…' : `Pagar Bs ${monto}`}
+                              </button>
+                              <button onClick={() => cancelarReserva(r)} disabled={pagando === r.id}
+                                className="text-xs px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-slate-200">Cancelar</button>
+                            </>
+                          )}
+                          {pagada && r.qr && (
+                            <button onClick={() => setPagoOk({ plato: r.platoId, fecha: r.fecha, turno: r.turno, monto: p?.monto ?? 0, beca: p?.metodo === 'beca', reservaId: r.id, qrDataUri: String(r.qr).split('::')[1] })}
+                              className="text-xs px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200">Ver QR</button>
+                          )}
+                          {pagada && (
+                            <button onClick={() => abrirFactura(r)} className="text-xs px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-medium">Ver factura</button>
+                          )}
+                        </div>
                       </div>
                     </div>
                   );
                 })}
+                {reservas.length > 60 && <div className="text-xs text-slate-500 text-center pt-2">Se muestran las 60 más recientes.</div>}
               </div>}
           </div>
         )}
@@ -362,7 +425,7 @@ export default function App() {
                 <button onClick={() => setReserva(null)} className="text-slate-400 hover:text-white text-2xl leading-none">×</button>
               </div>
               <div className="bg-slate-900/60 rounded-xl p-4 mb-4">
-                <div className="flex justify-between text-sm mb-2"><span className="text-slate-400">Monto</span><span className="text-white font-bold">Bs 10</span></div>
+                <div className="flex justify-between text-sm mb-2"><span className="text-slate-400">Monto</span><span className="text-white font-bold">Bs {reserva.monto ?? 10}</span></div>
                 <div className="flex justify-between text-sm"><span className="text-slate-400">Método</span><span className="text-white text-xs">Tarjeta de crédito o débito</span></div>
               </div>
               <a href={reserva.stripe.paymentUrl} target="_blank" rel="noreferrer"
@@ -388,12 +451,12 @@ export default function App() {
           <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setPagoOk(null)}>
             <div className="bg-slate-800 rounded-2xl p-8 max-w-md w-full border border-emerald-500/50 shadow-2xl text-center animate-in" onClick={e => e.stopPropagation()}>
               <div className="w-20 h-20 mx-auto bg-emerald-500 rounded-full flex items-center justify-center text-5xl mb-4">✓</div>
-              <h3 className="text-2xl font-bold text-white mb-2">¡Pago exitoso!</h3>
-              <p className="text-slate-400 text-sm mb-5">Tu reserva está confirmada</p>
+              <h3 className="text-2xl font-bold text-white mb-2">{pagoOk.beca ? '¡Reserva confirmada!' : '¡Pago exitoso!'}</h3>
+              <p className="text-slate-400 text-sm mb-5">{pagoOk.beca ? 'Cubierta por tu beca comedor' : 'Tu reserva está confirmada'}</p>
               <div className="bg-slate-900/60 rounded-xl p-4 mb-5 text-left">
                 <div className="flex justify-between text-sm mb-2"><span className="text-slate-400">Plato</span><span className="text-white font-medium">{pagoOk.plato}</span></div>
                 <div className="flex justify-between text-sm mb-2"><span className="text-slate-400">Fecha</span><span className="text-white">{pagoOk.fecha} · {pagoOk.turno}</span></div>
-                <div className="flex justify-between text-sm mb-2"><span className="text-slate-400">Monto</span><span className="text-emerald-400 font-bold">Bs {pagoOk.monto || 10}</span></div>
+                <div className="flex justify-between text-sm mb-2"><span className="text-slate-400">Monto</span><span className="text-emerald-400 font-bold">{pagoOk.beca ? 'Beca (sin costo)' : `Bs ${pagoOk.monto}`}</span></div>
                 <div className="flex justify-between text-sm"><span className="text-slate-400">Reserva</span><code className="text-cyan-400 text-xs">{pagoOk.reservaId?.slice(0, 12)}…</code></div>
               </div>
               {pagoOk.qrDataUri && (
@@ -407,6 +470,38 @@ export default function App() {
                   className="py-2.5 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-sm">Ver mis reservas</button>
                 <button onClick={() => setPagoOk(null)}
                   className="py-2.5 bg-gradient-to-r from-emerald-500 to-cyan-500 text-white rounded-lg text-sm font-semibold">Listo</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {factura && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setFactura(null)}>
+            <div className="bg-white text-slate-900 rounded-2xl p-7 max-w-md w-full shadow-2xl" onClick={e => e.stopPropagation()}>
+              <div className="flex justify-between items-start mb-1">
+                <div>
+                  <div className="text-lg font-bold text-slate-800">Comedor Universitario UAGRM</div>
+                  <div className="text-xs text-slate-500">Factura / recibo de ración</div>
+                </div>
+                <div className="text-right text-xs text-slate-500">
+                  <b className="text-slate-800">F-{String(factura.p.ticketId || factura.p.id).slice(0, 8).toUpperCase()}</b><br />
+                  {new Date(factura.p.fecha).toLocaleString('es-BO')}
+                </div>
+              </div>
+              <div className="text-sm mt-4 mb-3"><b>Cliente:</b> {user}</div>
+              <table className="w-full text-sm">
+                <thead><tr className="bg-slate-800 text-white text-xs"><th className="text-left p-2">Detalle</th><th className="text-left p-2">Servicio</th><th className="text-right p-2">Monto</th></tr></thead>
+                <tbody><tr className="border-b border-slate-200">
+                  <td className="p-2">{factura.r.platoId}</td>
+                  <td className="p-2">{factura.r.fecha}<br /><span className="text-xs text-slate-500">{factura.r.turno}</span></td>
+                  <td className="p-2 text-right">{factura.p.metodo === 'beca' ? 'Bs 0,00' : `Bs ${Number(factura.p.monto).toFixed(2).replace('.', ',')}`}</td>
+                </tr></tbody>
+              </table>
+              <div className="text-right text-lg font-bold mt-3">Total: {factura.p.metodo === 'beca' ? 'Bs 0,00 (beca)' : `Bs ${Number(factura.p.monto).toFixed(2).replace('.', ',')}`}</div>
+              <div className="text-xs text-slate-500 mt-3">Método de pago: <b>{METODO[factura.p.metodo] || factura.p.metodo}</b> · Reserva #{factura.r.id.slice(0, 12)}</div>
+              <div className="grid grid-cols-2 gap-3 mt-5">
+                <button onClick={() => setFactura(null)} className="py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-lg text-sm">Cerrar</button>
+                <button onClick={imprimirFactura} className="py-2.5 bg-gradient-to-r from-orange-500 to-amber-600 text-white rounded-lg text-sm font-semibold">Imprimir / PDF</button>
               </div>
             </div>
           </div>

@@ -1,7 +1,18 @@
-// COPIA de mobile/app-movil/src/reportes/exportar.js (el motor de reportes es el mismo en la app móvil y en el BI web: si cambias uno, cambia el otro).
-// Exportación del resultado de un reporte a CSV, PDF (vía HTML) y Excel. Funciones puras: sin internet y sin servidor.
-const { dmyIso } = require('./fechas');
-const { fmtValor } = require('./motor');
+// Exportación del resultado de un reporte a CSV, PDF (vía HTML) y Excel, en el navegador.
+// El reporte ya viene calculado del backend (POST /reportes/consulta): aquí solo se le da formato de archivo.
+
+/** «2026-11-08 14:30» -> «08/11/2026 14:30»; si no es una fecha, el texto tal cual. */
+const dmyIso = (s) => { const m = /^(\d{4})-(\d{2})-(\d{2})(?: (\d{2}:\d{2}))?/.exec(String(s)); return m ? `${m[3]}/${m[2]}/${m[1]}${m[4] ? ' ' + m[4] : ''}` : String(s); };
+
+/** Mismo formato de números que muestra la pantalla (es-BO). */
+function fmtValor(v, fmt) {
+  if (v === null || v === undefined) return '—';
+  const n = (x, d) => x.toLocaleString('es-BO', { minimumFractionDigits: d, maximumFractionDigits: d });
+  if (fmt === 'moneda') return `Bs ${n(v, 2)}`;
+  if (fmt === 'porcentaje') return `${n(v, 1)}%`;
+  if (typeof v === 'number') return Number.isInteger(v) ? v.toLocaleString('es-BO') : n(v, 2);
+  return String(v);
+}
 
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const PALETA = ['#f97316', '#06b6d4', '#8b5cf6', '#10b981', '#ef4444', '#eab308'];
@@ -139,4 +150,4 @@ function aXlsxBase64(res, XLSX) {
   return XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
 }
 
-module.exports = { aCsv, aHtml, aXlsxBase64, svgGrafico, nombreArchivo };
+module.exports = { aCsv, aHtml, aXlsxBase64, svgGrafico, nombreArchivo, fmtValor, dmyIso };

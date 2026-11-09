@@ -1,7 +1,5 @@
-// Datos de los reportes: el servidor entrega una copia (snapshot) por rol y el navegador la guarda (IndexedDB),
-// así los reportes se pueden generar también SIN conexión, igual que en la app móvil.
-import { API } from '../vivo';
-
+// Memoria del navegador para la pantalla de reportes: lo último consultado y las búsquedas recientes.
+// Los datos del comedor NO se guardan aquí: el reporte lo calcula el backend y solo se recuerda el resultado mostrado.
 const DB = 'bi-reportes';
 const STORE = 'kv';
 
@@ -34,35 +32,11 @@ export async function guardar(clave: string, valor: unknown): Promise<void> {
       t.oncomplete = () => ok();
       t.onerror = () => ok();
     });
-  } catch { /* navegador sin almacenamiento: los reportes siguen funcionando con datos en memoria */ }
+  } catch { /* navegador sin almacenamiento: la pantalla funciona igual */ }
 }
 
-function token(): string {
+/** El token de Keycloak que dejó el login (el backend saca de ahí el rol y qué datos puede ver). */
+export function token(): string {
   const m = document.cookie.match(/(?:^|;\s*)kc_token=([^;]+)/);
   return m ? decodeURIComponent(m[1]) : '';
-}
-
-export function rolesDelToken(): string[] {
-  try {
-    const t = token();
-    if (!t) return [];
-    const p = JSON.parse(atob(t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
-    return (p.realm_access?.roles || []).filter((r: string) => !r.startsWith('default-') && !r.startsWith('offline') && !r.startsWith('uma'));
-  } catch { return []; }
-}
-
-export type Snapshot = { descargado: string; generado: string; datasets: Record<string, { columnas: string[]; filas: any[][] }>; errores: Record<string, string> };
-
-/** Baja la copia de datos permitida para el rol del usuario y la guarda para usarla sin conexión. */
-export async function descargarSnapshot(): Promise<Snapshot> {
-  const roles = rolesDelToken();
-  const t = token();
-  const r = await fetch(`${API}/reportes/snapshot${roles.length ? `?rol=${encodeURIComponent(roles.join(','))}` : ''}`, {
-    cache: 'no-store', headers: t ? { Authorization: `Bearer ${t}` } : {},
-  });
-  if (!r.ok) throw new Error(`El servidor respondió ${r.status}`);
-  const s = await r.json();
-  const snap: Snapshot = { ...s, descargado: new Date().toISOString() };
-  await guardar('snapshot', snap);
-  return snap;
 }
