@@ -10,7 +10,7 @@ Todo lo que consume la API de los microservicios: gateways, frontends y la app m
 | `frontend/backoffice-gestion` | Back-office (menú, inventario, caja, comensales, becas, agentes) | Angular |
 | `frontend/portal-estudiante` | Portal del estudiante: menú, reservas, pago QR, beca | React · Vite (remote) |
 | `frontend/inteligencia-negocio` | Dashboards, predicción y KPI | Next.js |
-| `mobile/app-movil` | App móvil de reportes | React Native · Expo |
+| `mobile/app-flutter` | App móvil: reportes por voz/texto y desperdicio por foto con IA local | Flutter · Dart |
 
 ## Ejecutar
 

@@ -53,8 +53,11 @@ class Api {
       }
     }
     if (r.statusCode >= 300) {
-      final det = j is Map ? (j['detail'] ?? j['error'] ?? j['message']) : null;
-      throw ErrorApi(det is String ? det : 'El servidor respondió ${r.statusCode}.', estado: r.statusCode);
+      // El motivo real va en «message» (Nest) o «detail» (FastAPI); «error» solo trae el nombre genérico («Conflict»).
+      Object? det = j is Map ? (j['message'] ?? j['detail']) : null;
+      if (det is List) det = det.join(' ');
+      if (det is! String || det.isEmpty) det = null;
+      throw ErrorApi(det as String? ?? 'El servidor respondió ${r.statusCode}.', estado: r.statusCode);
     }
     if (j == null && r.body.isNotEmpty) {
       throw ErrorApi('El servidor respondió algo que no entiendo (¿esa función no está disponible?).', estado: r.statusCode);
