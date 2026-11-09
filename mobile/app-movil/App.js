@@ -1,6 +1,6 @@
-// Comedor UAGRM — App móvil de reportes (React Native + Expo).
-// Solo hace una cosa: generar reportes con IA dentro del teléfono, sin internet, por texto o por voz.
-// Ingreso con usuario y contraseña (Keycloak) y con huella; los datos se descargan cuando hay conexión.
+// Comedor UAGRM — App móvil (React Native + Expo) con IA dentro del teléfono, sin internet:
+//   · Reportes por texto o por voz   · Desperdicio por foto (TensorFlow Lite; fotos a S3 cuando hay red)
+// Ingreso con usuario y contraseña (Keycloak) y con huella; menú lateral; los datos se descargan cuando hay conexión.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, View } from 'react-native';
 import { C, S } from './src/componentes/tema';
@@ -9,9 +9,12 @@ import { borrar, guardar, leer } from './src/cuenta/almacen';
 import { renovarSesion } from './src/cuenta/auth';
 import { estadoBiometria, nombreBiometria, pedirHuella } from './src/cuenta/biometria';
 import { alCambiarRed, borrarLocal, cargarLocal, descargar, hayRed } from './src/datos';
+import Menu, { puedeVerDesperdicio } from './src/componentes/Menu';
 import Ajustes from './src/pantallas/Ajustes';
+import Desperdicio from './src/pantallas/Desperdicio';
 import Login from './src/pantallas/Login';
 import Reportes from './src/pantallas/Reportes';
+import { borrarEstado } from './src/vision/almacenVision';
 
 export default function App() {
   const [fase, setFase] = useState('cargando');           // cargando | login | principal
@@ -24,6 +27,9 @@ export default function App() {
   const [sincronizando, setSincronizando] = useState(false);
   const [errorSync, setErrorSync] = useState('');
   const [ajustes, setAjustes] = useState(false);
+  const [pantalla, setPantalla] = useState('reportes');   // reportes | desperdicio (el menú lateral cambia entre ellas)
+  const [menu, setMenu] = useState(false);
+  const [porEnviar, setPorEnviar] = useState(0);          // resultados de «Desperdicio por foto» aún sin enviar al servidor
   const sesionRef = useRef(null);
   sesionRef.current = sesion;
 
@@ -41,25 +47,33 @@ export default function App() {
 
   // ----------------------------- datos -----------------------------
 
+  // Token vigente: el de acceso dura minutos, así que se renueva con el de refresco antes de hablar con el servidor
+  const obtenerToken = useCallback(async () => {
+    const s = sesionRef.current;
+    if (!s) return null;
+    let token = s.accessToken;
+    const refresh = await leer('refresh');
+    if (refresh) {
+      try {
+        const n = await renovarSesion(refresh, cfg);
+        await guardar('refresh', n.refreshToken);
+        token = n.accessToken;
+        setSesion((x) => (x ? { ...x, accessToken: token } : x));
+      } catch { /* sin internet o sesión vencida: se intenta igual con lo que hay */ }
+    }
+    return token;
+  }, [cfg]);
+
   const sincronizar = useCallback(async () => {
     const s = sesionRef.current;
     if (!s) return;
     setSincronizando(true); setErrorSync('');
     try {
-      let token = s.accessToken;
-      const refresh = await leer('refresh');
-      if (refresh) {                                     // el token de acceso dura minutos: se renueva antes de pedir los datos
-        try {
-          const n = await renovarSesion(refresh, cfg);
-          await guardar('refresh', n.refreshToken);
-          token = n.accessToken;
-          setSesion((x) => (x ? { ...x, accessToken: token } : x));
-        } catch { /* sin internet o sesión vencida: se intenta igual con lo que hay */ }
-      }
+      const token = await obtenerToken();
       setDatos(await descargar({ api: cfg.api, token, rol: s.perfil.roles.join(',') || s.perfil.rol }));
     } catch (e) { setErrorSync(e.message || String(e)); }
     finally { setSincronizando(false); }
-  }, [cfg]);
+  }, [cfg, obtenerToken]);
 
   useEffect(() => {                                       // al entrar y cada vez que vuelve la conexión
     if (fase !== 'principal') return undefined;
@@ -99,10 +113,11 @@ export default function App() {
   }
 
   async function salir(olvidarHuella) {
-    setAjustes(false); setSesion(null); setFase('login'); setErrorSync('');
+    setAjustes(false); setMenu(false); setPantalla('reportes'); setSesion(null); setFase('login'); setErrorSync('');
     if (olvidarHuella) {
       await Promise.all(['bio', 'refresh', 'perfil', 'clave', 'historial'].map(borrar));
       await borrarLocal();
+      await borrarEstado();
       setBioActiva(false); setPerfilGuardado(null); setDatos(null);
     }
   }
@@ -113,10 +128,20 @@ export default function App() {
   if (fase === 'login') {
     return <Login cfg={cfg} setCfg={setCfg} perfilGuardado={perfilGuardado} bioActiva={bioActiva} onEntrar={entrar} />;
   }
+  const verDesperdicio = pantalla === 'desperdicio' && puedeVerDesperdicio(sesion.perfil);
+  const ir = (id) => {
+    setMenu(false);
+    if (id === 'ajustes') setAjustes(true); else setPantalla(id);
+  };
   return (
     <View style={S.pantalla}>
-      <Reportes perfil={sesion.perfil} datos={datos} enLinea={enLinea} sincronizando={sincronizando} errorSync={errorSync}
-        onSincronizar={sincronizar} onAjustes={() => setAjustes(true)} />
+      {verDesperdicio
+        ? <Desperdicio perfil={sesion.perfil} datos={datos} enLinea={enLinea} api={cfg.api} obtenerToken={obtenerToken}
+            onMenu={() => setMenu(true)} onPendientes={setPorEnviar} />
+        : <Reportes perfil={sesion.perfil} datos={datos} enLinea={enLinea} sincronizando={sincronizando} errorSync={errorSync}
+            onSincronizar={sincronizar} onMenu={() => setMenu(true)} />}
+      <Menu visible={menu} onCerrar={() => setMenu(false)} perfil={sesion.perfil} pantalla={verDesperdicio ? 'desperdicio' : 'reportes'}
+        onIr={ir} enLinea={enLinea} pendientes={porEnviar} />
       <Ajustes visible={ajustes} onCerrar={() => setAjustes(false)} perfil={sesion.perfil} bioActiva={bioActiva} setBioActiva={setBioActiva}
         cfg={cfg} setCfg={setCfg} datos={datos} sincronizando={sincronizando} onSincronizar={sincronizar}
         onBorrarDatos={async () => { await borrarLocal(); setDatos(null); }} onSalir={salir} />

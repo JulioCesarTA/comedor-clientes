@@ -27,7 +27,7 @@ function Chip({ texto, activo, onPress }) {
   );
 }
 
-export default function Reportes({ perfil, datos, enLinea, sincronizando, errorSync, onSincronizar, onAjustes }) {
+export default function Reportes({ perfil, datos, enLinea, sincronizando, errorSync, onSincronizar, onMenu }) {
   const [texto, setTexto] = useState('');
   const [formato, setFormato] = useState('pantalla');
   const [spec, setSpec] = useState(null);
@@ -112,12 +112,12 @@ export default function Reportes({ perfil, datos, enLinea, sincronizando, errorS
   return (
     <KeyboardAvoidingView style={S.pantalla} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <StatusBar style="light" />
-      <View style={[S.fila, { justifyContent: 'space-between', paddingHorizontal: 18, paddingTop: 52, paddingBottom: 8 }]}>
+      <View style={[S.fila, { paddingHorizontal: 12, paddingTop: 52, paddingBottom: 8 }]}>
+        <TouchableOpacity onPress={onMenu} style={{ padding: 8, marginRight: 4 }}><Text style={{ fontSize: 26, color: '#fff' }}>☰</Text></TouchableOpacity>
         <View style={{ flex: 1 }}>
           <Text style={S.titulo}>Reportes</Text>
           <Text style={S.subtitulo} numberOfLines={1}>{perfil.nombre} · {ETIQUETA_ROL[perfil.rol] || perfil.rol}</Text>
         </View>
-        <TouchableOpacity onPress={onAjustes} style={{ padding: 8 }}><Text style={{ fontSize: 24 }}>⚙️</Text></TouchableOpacity>
       </View>
 
       <ScrollView ref={scroll} contentContainerStyle={{ padding: 18, paddingTop: 6 }} keyboardShouldPersistTaps="handled">

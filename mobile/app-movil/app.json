@@ -20,7 +20,8 @@
       "permissions": [
         "USE_BIOMETRIC",
         "USE_FINGERPRINT",
-        "RECORD_AUDIO"
+        "RECORD_AUDIO",
+        "android.permission.CAMERA"
       ]
     },
     "plugins": [
@@ -51,11 +52,24 @@
         }
       ],
       "expo-dev-client",
-      "expo-build-properties"
+      "expo-build-properties",
+      [
+        "react-native-fast-tflite",
+        {
+          "enableCoreMLDelegate": false
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "La cámara se usa para fotografiar la bandeja y analizar cuánta comida quedó.",
+          "photosPermission": "Para elegir fotos de bandejas ya tomadas."
+        }
+      ]
     ],
     "extra": {
-      "apiUrl": "http://32.187.224.152:8080",
-      "keycloakUrl": "http://32.187.224.152:8085"
+      "apiUrl": "https://44.228.1.64:8080",
+      "keycloakUrl": "https://44.228.1.64:8085"
     }
   }
 }
