@@ -13,6 +13,7 @@ import 'cuenta/bloqueo.dart';
 import 'datos/api.dart';
 import 'notificaciones.dart';
 import 'pantallas/ajustes.dart';
+import 'pantallas/analitica.dart';
 import 'pantallas/asistencia.dart';
 import 'pantallas/desperdicio.dart';
 import 'pantallas/login.dart';
@@ -197,10 +198,11 @@ class _RaizState extends State<Raiz> {
     final puedeAsistencia = perfil.tieneAlguno(rolesAsistencia);
     final verVision = _pantalla == 'desperdicio' && puedeVision;
     final verAsistencia = _pantalla == 'asistencia' && puedeAsistencia;
+    final verAgrupacion = _pantalla == 'agrupacion' && puedeVision;
     return Scaffold(
       drawer: _Menu(
         perfil: perfil,
-        pantalla: verVision ? 'desperdicio' : verAsistencia ? 'asistencia' : 'reportes',
+        pantalla: verVision ? 'desperdicio' : verAsistencia ? 'asistencia' : verAgrupacion ? 'agrupacion' : 'reportes',
         enLinea: _enLinea,
         pendientes: _porEnviar,
         puedeVision: puedeVision,
@@ -226,6 +228,9 @@ class _RaizState extends State<Raiz> {
         if (verAsistencia) {
           return AsistenciaPantalla(perfil: perfil, api: api, enLinea: _enLinea, onMenu: abrir);
         }
+        if (verAgrupacion) {
+          return AgrupacionPantalla(api: api, enLinea: _enLinea, onMenu: abrir);
+        }
         return Reportes(perfil: perfil, api: api, enLinea: _enLinea, onMenu: abrir);
       }),
     );
@@ -249,6 +254,7 @@ class _Menu extends StatelessWidget {
     final items = [
       ('reportes', Icons.insert_chart_outlined, 'Reportes', 'Por voz o texto'),
       if (puedeVision) ('desperdicio', Icons.photo_camera_outlined, 'Desperdicio por foto', 'IA local (TensorFlow Lite)'),
+      if (puedeVision) ('agrupacion', Icons.bubble_chart_outlined, 'Agrupación de platos', 'K-Means · funciona sin internet'),
       if (puedeAsistencia) ('asistencia', Icons.how_to_reg_outlined, 'Mi asistencia', 'Marcar entrada y salida'),
       ('ajustes', Icons.settings_outlined, 'Ajustes', 'Cuenta, huella y servidor'),
     ];
