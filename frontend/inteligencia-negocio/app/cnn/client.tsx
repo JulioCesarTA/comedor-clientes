@@ -8,6 +8,21 @@ const TURNO: Record<string, string> = { DESAYUNO: 'Desayuno', ALMUERZO: 'Almuerz
 const corto = (id: string) => id.replace('plato-', '');
 const colorRestante = (v: number) => (v > 50 ? '#ef4444' : v > 25 ? '#f59e0b' : '#10b981');
 
+// % que quedó de cada sector de la bandeja (arroz, ensalada, …); el total de la bandeja es el promedio de estos
+function Sectores({ s, chico }: { s?: any[] | null; chico?: boolean }) {
+  if (!s?.length) return null;
+  return (
+    <div className={chico ? 'mt-1 space-y-0.5 text-[10px]' : 'mt-3 space-y-1 text-xs'}>
+      {s.map((x: any) => (
+        <div key={x.clase} className="flex justify-between gap-2">
+          <span className="text-slate-400 truncate first-letter:uppercase">{x.nombre}</span>
+          <span className="font-semibold tabular-nums" style={{ color: colorRestante(x.restante) }}>{Math.round(x.restante)}%</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Foto({ src, mascara }: { src: string; mascara?: number[][] }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
@@ -117,7 +132,10 @@ export function DesperdicioVivo() {
           {refNueva && (
             <div className="mt-4 space-y-2">
               <Foto src={prevRef} mascara={refNueva.mascara} />
-              <div className="text-xs text-slate-400">En verde, lo que el modelo reconoció como comida ({(refNueva.fraccionComida * 100).toFixed(0)}% de la foto). Referencia guardada: {corto(refNueva.platoId)} · {refNueva.fecha}.</div>
+              <div className="text-xs text-slate-400">En verde, lo que el modelo reconoció como comida. Referencia guardada: {corto(refNueva.platoId)} · {refNueva.fecha}.</div>
+              {refNueva.sectores?.length > 0 && (
+                <div className="text-xs text-slate-300">Sectores reconocidos: {refNueva.sectores.map((s: any) => s.nombre).join(', ')}.</div>
+              )}
               {refNueva.advertencia && <div className="text-xs text-amber-300">{refNueva.advertencia}</div>}
             </div>
           )}
@@ -147,9 +165,10 @@ export function DesperdicioVivo() {
                 <Foto src={a.src} mascara={a.mascara} />
                 <div className="mt-3 flex items-end justify-between">
                   <div><div className="text-xs text-slate-400">Se comió</div><div className="text-2xl font-bold text-emerald-400">{a.comidoPct}%</div></div>
-                  <div className="text-right"><div className="text-xs text-slate-400">Quedó</div><div className="text-2xl font-bold" style={{ color: colorRestante(a.restantePct) }}>{a.restantePct}%</div></div>
+                  <div className="text-right"><div className="text-xs text-slate-400">{a.sectores?.length ? 'Quedó (promedio)' : 'Quedó'}</div><div className="text-2xl font-bold" style={{ color: colorRestante(a.restantePct) }}>{a.restantePct}%</div></div>
                 </div>
                 <div className="h-2 bg-slate-800 rounded-full overflow-hidden mt-2"><div className="h-full" style={{ width: `${a.restantePct}%`, background: colorRestante(a.restantePct) }} /></div>
+                <Sectores s={a.sectores} />
                 <div className="text-[11px] text-slate-500 mt-1.5">{corto(a.platoId)} · confianza {(a.confianza * 100).toFixed(0)}%</div>
               </div>
             ))}
@@ -173,14 +192,17 @@ export function DesperdicioVivo() {
             </ResponsiveContainer>
           )}
         </Card>
-        <Card title="Últimas fotos analizadas" subtitle="Se actualizan en vivo">
+        <Card title="Últimas fotos analizadas" subtitle="Se actualizan en vivo · lo que quedó de cada sector y el promedio">
           {!d?.recientes?.length ? <div className="text-sm text-slate-500 py-8 text-center">Sin fotos todavía.</div> : (
-            <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               {d.recientes.map((r: any) => (
-                <div key={r.id} className="text-center">
-                  <img src={`${API}/ml/vision/foto/bandeja/${r.id}`} alt="bandeja" className="rounded-lg h-20 w-full object-cover border border-slate-700" />
-                  <div className="text-xs font-semibold mt-1" style={{ color: colorRestante(r.restante) }}>queda {r.restante}%</div>
-                  <div className="text-[10px] text-slate-500 truncate">{corto(r.platoId)}</div>
+                <div key={r.id} className="bg-slate-900/50 rounded-lg p-1.5 border border-slate-800">
+                  <img src={`${API}/ml/vision/foto/bandeja/${r.id}`} alt="bandeja" className="rounded-md h-24 w-full object-cover border border-slate-700" />
+                  <div className="text-[10px] text-slate-500 truncate mt-1 text-center">{corto(r.platoId)}</div>
+                  <Sectores s={r.sectores} chico />
+                  <div className="text-xs font-semibold mt-1 text-center border-t border-slate-800 pt-1" style={{ color: colorRestante(r.restante) }}>
+                    {r.sectores?.length ? 'promedio' : 'queda'} {r.restante}%
+                  </div>
                 </div>
               ))}
             </div>
