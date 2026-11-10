@@ -8,7 +8,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 
-import '../cuenta/almacen.dart';
 import '../cuenta/auth.dart';
 import '../datos/api.dart';
 import '../reportes/exportar.dart';
@@ -31,8 +30,6 @@ class _ReportesState extends State<Reportes> {
   final _voz = SpeechToText();
   Map<String, dynamic>? _res;
   List<dynamic> _ayuda = [];
-  List<String> _historial = [];
-  String _formato = 'pantalla';
   String _error = '';
   String _aviso = '';
   bool _cargando = false;
@@ -70,13 +67,16 @@ class _ReportesState extends State<Reportes> {
       _dictando = false;
       setState(() { _escuchando = false; _error = _mensajeVoz(e.errorMsg); });
     }).then((ok) async {
-      if (!ok || !mounted) return;
+      if (!mounted) return;
+      if (!ok) {                     // sin permiso de micrófono o sin reconocedor de voz en el teléfono
+        setState(() => _hayVoz = false);
+        return;
+      }
       final ls = await _voz.locales();
       final es = ls.where((l) => l.localeId.toLowerCase().startsWith('es')).toList();
       final bo = es.where((l) => l.localeId.toLowerCase().replaceAll('-', '_') == 'es_bo').firstOrNull;
       setState(() { _hayVoz = true; _localeVoz = (bo ?? es.firstOrNull)?.localeId; });
     });
-    leer('historial', <dynamic>[]).then((h) => mounted ? setState(() => _historial = List<String>.from(h ?? [])) : null);
     _preparar(false);
   }
 
@@ -110,7 +110,8 @@ class _ReportesState extends State<Reportes> {
     }
     if (e.contains('network')) return 'El dictado de este teléfono necesita internet. Sin conexión, escribe tu pedido: el reporte sí funciona.';
     if (e.contains('no_match') || e.contains('speech_timeout')) return 'No se escuchó nada. Habla cerca del micrófono e inténtalo otra vez.';
-    return '';
+    if (e.contains('busy')) return 'El micrófono está ocupado por otra app. Ciérrala e inténtalo otra vez.';
+    return 'No se pudo dictar ($e). Escribe tu pedido.';
   }
 
   @override
@@ -122,13 +123,10 @@ class _ReportesState extends State<Reportes> {
     super.dispose();
   }
 
-  void _recordar(String t) {
-    final h = [t, ..._historial.where((x) => x != t)].take(8).toList();
-    setState(() => _historial = h);
-    guardar('historial', h);
-  }
+  // El archivo se descarga solo si ESTE pedido lo nombra ("en pdf", "pasalo a excel"); seguir la conversación no lo repite
+  static final _pideArchivo = RegExp(r'\b(pdf|excel|xlsx|xls|planilla|hoja de c[aá]lculo)\b', caseSensitive: false);
 
-  Future<void> _generar(String? t, {bool continuar = true, String? fmt}) async {
+  Future<void> _generar(String? t, {bool continuar = true}) async {
     final q = (t ?? _texto.text).trim();
     if (q.isEmpty || _cargando) return;                 // no se manda dos veces mientras se calcula
     FocusScope.of(context).unfocus();
@@ -140,10 +138,8 @@ class _ReportesState extends State<Reportes> {
       final r = iaLocal.consultar(q, anterior);        // se calcula aquí, sin red
       if (!mounted) return;
       setState(() { _res = r; _texto.text = q; });
-      _recordar(q);
-      final destino = fmt ?? ((r['spec']?['salida'] ?? 'pantalla') != 'pantalla' ? r['spec']['salida'] as String : _formato);
-      setState(() => _formato = destino);
-      if (destino != 'pantalla') await _exportar(destino);
+      final salida = (r['spec']?['salida'] ?? 'pantalla') as String;
+      if (salida != 'pantalla' && _pideArchivo.hasMatch(q)) await _exportar(salida);
     } catch (e) {
       if (mounted) setState(() => _error = mensajeError(e));
     } finally {
@@ -224,7 +220,6 @@ class _ReportesState extends State<Reportes> {
   Widget build(BuildContext context) {
     final res = _res;
     final spec = res?['spec'] as Map<String, dynamic>?;
-    final ejemplos = _ayuda.expand<String>((d) => List<String>.from(d['ejemplos'] ?? [])).take(6).toList();
     return Scaffold(
       appBar: AppBar(
         leading: IconButton(icon: const Icon(Icons.menu), onPressed: widget.onMenu),
@@ -287,8 +282,8 @@ class _ReportesState extends State<Reportes> {
               child: TextField(
                 controller: _texto, maxLines: 3, minLines: 3, textInputAction: TextInputAction.done,
                 readOnly: _escuchando || _cargando,
-                onSubmitted: (_) => _escuchando ? null : _generar(null, fmt: _formato),
-                decoration: const InputDecoration(hintText: 'Ej.: pagos de noviembre, los mayores primero, en Excel'),
+                onSubmitted: (_) => _escuchando ? null : _generar(null),
+                decoration: const InputDecoration(hintText: 'Ej.: pagos de noviembre, los mayores primero, en pdf'),
               ),
             ),
             const SizedBox(width: 10),
@@ -312,27 +307,15 @@ class _ReportesState extends State<Reportes> {
             const Padding(padding: EdgeInsets.only(top: 6),
                 child: Text('Habla tranquilo: se envía solo cuando te quedes callado 3 segundos. Toca ■ para parar sin enviar.',
                     style: TextStyle(color: C.rojo, fontSize: 11.5))),
-          const Etiqueta('Ver en', arriba: 14),
-          Wrap(spacing: 8, runSpacing: 8, children: [
-            for (final f in const [['pantalla', 'Pantalla'], ['pdf', 'PDF'], ['excel', 'Excel']])
-              ChipSel(texto: f[1], activo: _formato == f[0], onTap: () => setState(() => _formato = f[0])),
-          ]),
           const SizedBox(height: 12),
           FilledButton(
-            onPressed: _cargando || _escuchando ? null : () => _generar(null, fmt: _formato),
+            onPressed: _cargando || _escuchando ? null : () => _generar(null),
             child: _cargando
                 ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                 : const Text('Generar reporte'),
           ),
           if (_error.isNotEmpty) Aviso(_error),
           if (_aviso.isNotEmpty) Aviso(_aviso, tipo: 'ok'),
-          if (_historial.isNotEmpty) ...[
-            const Etiqueta('Recientes', arriba: 14),
-            Wrap(spacing: 8, runSpacing: 8, children: [
-              for (final h in _historial)
-                ChipSel(texto: h.length > 34 ? '${h.substring(0, 33)}…' : h, onTap: () => _generar(h, continuar: false)),
-            ]),
-          ],
         ]),
 
         if (res != null) ...[
@@ -369,38 +352,10 @@ class _ReportesState extends State<Reportes> {
             for (final l in List<String>.from(res['resumen'] ?? []))
               Padding(padding: const EdgeInsets.only(bottom: 2), child: Text(l, style: const TextStyle(color: C.texto, fontSize: 13))),
             const SizedBox(height: 12),
-            Row(children: [
-              for (final f in const [['pdf', 'PDF'], ['excel', 'Excel']])
-                Expanded(child: Padding(
-                  padding: EdgeInsets.only(right: f[0] == 'excel' ? 0 : 8),
-                  child: OutlinedButton(onPressed: () => _exportar(f[0]), child: Text('⬇ ${f[1]}')),
-                )),
-            ]),
-            const SizedBox(height: 12),
             _Tabla(res: res),
           ]),
         ],
 
-        if (res == null && ejemplos.isNotEmpty)
-          Tarjeta(titulo: 'Pruébalo', hijos: [
-            Wrap(spacing: 8, runSpacing: 8, children: [
-              for (final e in ejemplos)
-                ChipSel(texto: e.length > 42 ? '${e.substring(0, 41)}…' : e, onTap: () => _generar(e, continuar: false)),
-            ]),
-          ]),
-        if (res == null && _ayuda.isNotEmpty)
-          Tarjeta(titulo: '¿Qué puedo pedir?', hijos: [
-            for (final d in _ayuda)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('${d['etiqueta']}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
-                  Text('${d['descripcion']}', style: const TextStyle(color: C.suave, fontSize: 12)),
-                  Text(List<dynamic>.from(d['columnas'] ?? []).map((c) => c['etiqueta']).join(' · '),
-                      style: const TextStyle(color: C.tenue, fontSize: 11.5)),
-                ]),
-              ),
-          ]),
         const SizedBox(height: 30),
       ]),
     );

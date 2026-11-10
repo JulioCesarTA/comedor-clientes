@@ -22,7 +22,12 @@ const TIEMPO = { dia: 'dia', dias: 'dia', diario: 'dia', diaria: 'dia', diariame
   ano: 'anio', anos: 'anio', anual: 'anio', anualmente: 'anio', 'dia de la semana': 'dia_semana', 'dias de la semana': 'dia_semana' };
 const COL_NUM = { pagos: 'monto', estudiantes: 'reservas', becas: 'uso', menus: 'apartadas', insumos: 'stock', desperdicio: 'restante', reservas: null };
 const FORMATOS = [['pdf', /\bpdf\b/], ['excel', /\b(excel|xlsx|xls|hoja de calculo|planilla|spreadsheet)\b/], ['pantalla', /\b(en pantalla|por pantalla|en la pantalla|aqui)\b/]];
-const SIN_PALABRA = { media: 'beca' };            // valores ambiguos: solo cuentan junto a esta palabra
+const SIN_PALABRA = { media: 'beca' };
+// «los que vinieron / comieron / asistieron al comedor»: raciones servidas (reservas consumidas), no la asistencia del personal
+const VINIERON = /\b(vinieron|vino al comedor|asistieron|asistio al comedor|comieron|almorzaron|cenaron|desayunaron|entraron al comedor|fueron al comedor|pasaron por el comedor|se sirvieron|retiraron (?:su|sus) racion(?:es)?)\b/;
+const DEL_PERSONAL = /\b(personal|empleados?|trabajadores?|cocineros?|marcas?|marcaron|marcacion\w*)\b/;
+const DIA_REL = 'hoy|ayer|anteayer|lunes|martes|miercoles|jueves|viernes|sabado|domingo';
+const NUM_PALABRA = { un: 1, una: 1, uno: 1 };            // valores ambiguos: solo cuentan junto a esta palabra
 
 // ----------------------------- texto -----------------------------
 
@@ -114,6 +119,15 @@ function fechaTexto(d, m, y, hoy) {
   return F.fecha(anio, mes, Math.min(Number(d), F.diasEnMes(anio, mes)));
 }
 
+/** hoy, ayer, anteayer o el último lunes/martes/... que ya pasó (o hoy) */
+function diaRelativo(w, hoy) {
+  if (w === 'hoy' || w === 'la fecha' || w === 'ahora') return hoy;
+  if (w === 'ayer') return F.sumarDias(hoy, -1);
+  if (w === 'anteayer') return F.sumarDias(hoy, -2);
+  const d = F.sumarDias(F.lunesDe(hoy), DIAS[w]);
+  return d > hoy ? F.sumarDias(d, -7) : d;
+}
+
 function ultimos(n, unidad, hoy) {
   const dias = n * (unidad.startsWith('dia') ? 1 : unidad.startsWith('semana') ? 7 : unidad.startsWith('mes') ? 30 : 365);
   return rango(F.sumarDias(hoy, dias > 1 ? -(dias - 1) : 0), hoy, `los últimos ${n} ${n !== 1 ? unidad : unidad.replace(/s$/, '')}`);
@@ -124,7 +138,32 @@ function proximos(n, unidad, hoy) {
 }
 
 function parseFechas(t, hoy) {
-  let m = new RegExp(`\\b(?:del?|entre)(?: el)? (\\d{1,2}) (?:al?|y)(?: el)? (\\d{1,2}) (?:de )?(${MES_ALT})(?: (?:de|del) (\\d{4}))?\\b`).exec(t);
+  // «semana del 2 de noviembre»: esa semana, de lunes a domingo
+  let m = new RegExp(`\\bsemana del? (\\d{1,2}) (?:de )?(${MES_ALT})(?: (?:de|del) (\\d{4}))?\\b`).exec(t);
+  if (m) {
+    const a = F.lunesDe(fechaTexto(m[1], m[2], m[3], hoy)), b = F.sumarDias(a, 6);
+    return [rango(a, b, `la semana del ${F.dmy(a)} al ${F.dmy(b)}`), blank(t, ...spanDe(m))];
+  }
+  // «de anteayer a hoy», «desde el lunes hasta hoy», «entre ayer y hoy»
+  m = new RegExp(`\\b(?:desde|entre|de|del)(?: el)? (${DIA_REL}) (?:a|al|hasta|y)(?: el)? (${DIA_REL}|la fecha|ahora)\\b`).exec(t);
+  if (m) {
+    let a = diaRelativo(m[1], hoy), b = diaRelativo(m[2], hoy);
+    if (a > b) [a, b] = [b, a];
+    return [rango(a, b, `del ${F.dmy(a)} al ${F.dmy(b)}`), blank(t, ...spanDe(m))];
+  }
+  // «desde ayer», «desde el lunes»: hasta hoy
+  m = new RegExp(`\\b(?:desde|a partir de)(?: el)? (${DIA_REL})\\b`).exec(t);
+  if (m) { const a = diaRelativo(m[1], hoy); return [rango(a, hoy, `desde el ${F.dmy(a)}`), blank(t, ...spanDe(m))]; }
+  // «hace 3 días» (ese día) · «desde hace 2 semanas», «hace un mes» (desde entonces hasta hoy)
+  m = /\b(desde )?hace (\d+|un|una|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|quince|veinte|treinta) (dias?|semanas?|mes|meses)\b/.exec(t);
+  if (m) {
+    const n = /^\d+$/.test(m[2]) ? Number(m[2]) : (NUM_PALABRA[m[2]] || NUMEROS[m[2]]);
+    const dias = n * (m[3].startsWith('dia') ? 1 : m[3].startsWith('semana') ? 7 : 30);
+    const a = F.sumarDias(hoy, -dias);
+    const r = m[1] || !m[3].startsWith('dia') ? rango(a, hoy, `desde el ${F.dmy(a)}`) : rango(a, a, `el ${F.dmy(a)}`);
+    return [r, blank(t, ...spanDe(m))];
+  }
+  m = new RegExp(`\\b(?:del?|entre)(?: el)? (\\d{1,2}) (?:al?|y)(?: el)? (\\d{1,2}) (?:de )?(${MES_ALT})(?: (?:de|del) (\\d{4}))?\\b`).exec(t);
   if (m) {
     let a = fechaTexto(m[1], m[3], m[4], hoy), b = fechaTexto(m[2], m[3], m[4], hoy);
     if (a > b) [a, b] = [b, a];
@@ -144,6 +183,9 @@ function parseFechas(t, hoy) {
       const a = new Date(Math.min(...ds)), b = new Date(Math.max(...ds));
       return [rango(a, b, `del ${F.dmy(a)} al ${F.dmy(b)}`), restos];
     }
+    // «del 1 de noviembre a la fecha», «desde el 5/10 hasta hoy»
+    const tras = /^\s*(?:a|al|hasta)(?: el dia de)? (?:la fecha|hoy|ahora)\b/.exec(t.slice(cand[0][1]));
+    if (tras) return [rango(ds[0], hoy, `desde el ${F.dmy(ds[0])}`), blank(restos, cand[0][1], cand[0][1] + tras[0].length)];
     const antes = t.slice(Math.max(0, cand[0][0] - 22), cand[0][0]);
     if (/(desde|a partir de|despues de)(?: el)? $/.test(antes)) return [rango(ds[0], hoy, `desde el ${F.dmy(ds[0])}`), restos];
     if (/(hasta|antes de)(?: el)? $/.test(antes)) return [rango(null, ds[0], `hasta el ${F.dmy(ds[0])}`), restos];
@@ -323,6 +365,7 @@ function frasesEspeciales(t, dsId) {
     else if (/\b(con beca|becad[oa]s?|becari[oa]s?)\b/.test(t)) filtros.push({ col: 'beca', op: '!=', valor: 'Sin beca' });
     if (/\b(sin reservas|no reservaron|nunca reservaron)\b/.test(t)) filtros.push({ col: 'reservas', op: '=', valor: 0 });
   }
+  if (dsId === 'reservas' && VINIERON.test(t)) filtros.push({ col: 'estado', op: '=', valor: 'Consumida' });
   if (dsId === 'becas') {
     if (/\b(inactiv\w+|sin usar|sin uso|no (?:la )?(?:usan|usaron|usa)|desaprovechad\w+)\b/.test(t)) filtros.push({ col: 'usadas', op: '=', valor: 0 });
     if (/\b(no vigentes?|vencidas?|expiradas?)\b/.test(t)) filtros.push({ col: 'vigente', op: '=', valor: 'No' });
@@ -334,6 +377,7 @@ function frasesEspeciales(t, dsId) {
 // ----------------------------- detección del conjunto de datos -----------------------------
 
 function detectarDataset(t) {
+  if (VINIERON.test(t) && !DEL_PERSONAL.test(t)) return { id: 'reservas', score: 5, ranking: [['reservas', 5]] };
   const compartidas = {};
   for (const ds of Object.values(DATASETS)) for (const c of ds.columnas) compartidas[c.nombre] = (compartidas[c.nombre] || 0) + 1;
   const puntaje = {};
@@ -575,6 +619,32 @@ function resolverMedidaOrden(spec) {
   return spec;
 }
 
+// «quita la columna estado», «saca el método», «sin la columna estudiante», «agrega la matrícula»
+const QUITAR_COL = /^(?:y |ahora |pero |tambien )?(?:quita(?:le|r)?|saca(?:le|r)?|elimina(?:le|r)?|borra(?:le|r)?|oculta(?:le|r)?|remueve|no (?:quiero ver|quiero|muestres|pongas)|sin)\b(.*)$/;
+const AGREGAR_COL = /^(?:y |ahora |pero |tambien )?(?:agrega(?:le|r)?|anade(?:le)?|pon(?:le|er)?|incluye|muestra(?:me)? tambien|quiero ver tambien)\b(.*)$/;
+
+/** Quita o agrega columnas al reporte anterior. null si el pedido no es eso (p. ej. «sin beca» es un filtro). */
+function editarColumnas(t, previa) {
+  if ((previa.agrupar || []).length || (previa.medidas || []).length) return null;   // un resumen agrupado tiene otras columnas
+  if (/\bfiltros?\b/.test(t)) return null;
+  const quitar = QUITAR_COL.exec(t), agregar = quitar ? null : AGREGAR_COL.exec(t);
+  const m = quitar || agregar;
+  if (!m) return null;
+  if (/^(?:(?:y|ahora|pero|tambien) )?sin\b/.test(t) && !/\bcolumnas?\b/.test(t)) return null;
+  const nombres = [...new Set(menciones(m[1], previa.dataset, null).map((x) => x[2]))];
+  if (!nombres.length) return null;
+  const ds = DATASETS[previa.dataset];
+  let cols = [...(previa.columnas || ds.defecto)];
+  if (quitar) cols = cols.filter((c) => !nombres.includes(c));
+  else nombres.forEach((n) => { if (!cols.includes(n)) cols.push(n); });
+  if (!cols.length) throw new NoEntendido('El reporte tiene que quedar con al menos una columna.');
+  const spec = JSON.parse(JSON.stringify(previa));
+  spec.columnas = ds.columnas.map((c) => c.nombre).filter((c) => cols.includes(c));      // en el orden del catálogo
+  const fmt = FORMATOS.find(([, re]) => re.test(t));
+  if (fmt) spec.salida = fmt[0];
+  return spec;
+}
+
 const esRefinamiento = (t) => /^(ahora|ademas|tambien|y |pero|mejor|solo|solamente|quitale|quita|agregale|agrega|ponle|pon |cambialo|cambia|ordenalo|ordena|filtralo|filtra|agrupalo|agrupa|muestrame tambien|que sea|en vez|en lugar)/.test(t);
 const mismaClase = (op) => ['=', 'en', '!=', 'no_en'].includes(op);
 
@@ -584,6 +654,8 @@ function interpretar(texto, { previa = null, hoy = F.hoyLocal(), tablas = null }
   if (!t0) throw new NoEntendido('Escribe o di qué reporte quieres.');
   const reiniciar = /\b(nuevo reporte|otro reporte|desde cero|empezar de nuevo|reiniciar)\b/.test(t0);
   if (reiniciar) previa = null;
+  const editado = previa && DATASETS[previa.dataset] ? editarColumnas(t0, previa) : null;
+  if (editado) return { spec: editado, entendi: entendido(editado), notas: [], confianza: 1, continuacion: true, alternativas: [] };
   const det = detectarDataset(t0);
   let dsId = det.id, refina = false;
   if (previa && DATASETS[previa.dataset] && (dsId === null || det.score < 1.5 || (dsId === previa.dataset && esRefinamiento(t0)))) { dsId = previa.dataset; refina = true; }

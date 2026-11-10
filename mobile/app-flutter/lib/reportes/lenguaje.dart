@@ -46,6 +46,11 @@ final _formatos = <(String, RegExp)>[
   ('pantalla', RegExp(r'\b(en pantalla|por pantalla|en la pantalla|aqui)\b')),
 ];
 const _sinPalabra = {'media': 'beca'}; // valores ambiguos: solo cuentan junto a esta palabra
+// «los que vinieron / comieron / asistieron al comedor»: raciones servidas (reservas consumidas), no la asistencia del personal
+final _vinieron = RegExp(r'\b(vinieron|vino al comedor|asistieron|asistio al comedor|comieron|almorzaron|cenaron|desayunaron|entraron al comedor|fueron al comedor|pasaron por el comedor|se sirvieron|retiraron (?:su|sus) racion(?:es)?)\b');
+final _delPersonal = RegExp(r'\b(personal|empleados?|trabajadores?|cocineros?|marcas?|marcaron|marcacion\w*)\b');
+const _diaRel = 'hoy|ayer|anteayer|lunes|martes|miercoles|jueves|viernes|sabado|domingo';
+const _numPalabra = {'un': 1, 'una': 1, 'uno': 1};
 
 // ----------------------------- utilidades -----------------------------
 
@@ -186,6 +191,15 @@ DateTime _fechaTexto(String d, String mes, String? y, DateTime hoy) {
   return f.fecha(anio, mm, m.min(int.parse(d), f.diasEnMes(anio, mm)));
 }
 
+/// hoy, ayer, anteayer o el último lunes/martes/... que ya pasó (o hoy)
+DateTime _diaRelativo(String w, DateTime hoy) {
+  if (w == 'hoy' || w == 'la fecha' || w == 'ahora') return hoy;
+  if (w == 'ayer') return f.sumarDias(hoy, -1);
+  if (w == 'anteayer') return f.sumarDias(hoy, -2);
+  final d = f.sumarDias(f.lunesDe(hoy), _dias[w]!);
+  return d.isAfter(hoy) ? f.sumarDias(d, -7) : d;
+}
+
 Mapa _ultimos(int n, String unidad, DateTime hoy) {
   final dias = n * (unidad.startsWith('dia') ? 1 : unidad.startsWith('semana') ? 7 : unidad.startsWith('mes') ? 30 : 365);
   return _rango(f.sumarDias(hoy, dias > 1 ? -(dias - 1) : 0), hoy, 'los últimos $n ${n != 1 ? unidad : unidad.replaceFirst(RegExp(r's$'), '')}');
@@ -200,7 +214,40 @@ DateTime _minF(Iterable<DateTime> l) => l.reduce((a, b) => b.isBefore(a) ? b : a
 DateTime _maxF(Iterable<DateTime> l) => l.reduce((a, b) => b.isAfter(a) ? b : a);
 
 (Mapa?, String) parseFechas(String t, DateTime hoy) {
-  var x = _busca(RegExp(r'\b(?:del?|entre)(?: el)? (\d{1,2}) (?:al?|y)(?: el)? (\d{1,2}) (?:de )?(' + _mesAlt + r')(?: (?:de|del) (\d{4}))?\b'), t);
+  // «semana del 2 de noviembre»: esa semana, de lunes a domingo
+  var x = _busca(RegExp(r'\bsemana del? (\d{1,2}) (?:de )?(' + _mesAlt + r')(?: (?:de|del) (\d{4}))?\b'), t);
+  if (x != null) {
+    final a = f.lunesDe(_fechaTexto(x[1]!, x[2]!, x[3], hoy)), b = f.sumarDias(a, 6);
+    return (_rango(a, b, 'la semana del ${f.dmy(a)} al ${f.dmy(b)}'), _blank(t, x.start, x.end));
+  }
+  // «de anteayer a hoy», «desde el lunes hasta hoy», «entre ayer y hoy»
+  x = _busca(RegExp(r'\b(?:desde|entre|de|del)(?: el)? (' + _diaRel + r') (?:a|al|hasta|y)(?: el)? (' + _diaRel + r'|la fecha|ahora)\b'), t);
+  if (x != null) {
+    var a = _diaRelativo(x[1]!, hoy), b = _diaRelativo(x[2]!, hoy);
+    if (a.isAfter(b)) {
+      final tmp = a;
+      a = b;
+      b = tmp;
+    }
+    return (_rango(a, b, 'del ${f.dmy(a)} al ${f.dmy(b)}'), _blank(t, x.start, x.end));
+  }
+  // «desde ayer», «desde el lunes»: hasta hoy
+  x = _busca(RegExp(r'\b(?:desde|a partir de)(?: el)? (' + _diaRel + r')\b'), t);
+  if (x != null) {
+    final a = _diaRelativo(x[1]!, hoy);
+    return (_rango(a, hoy, 'desde el ${f.dmy(a)}'), _blank(t, x.start, x.end));
+  }
+  // «hace 3 días» (ese día) · «desde hace 2 semanas», «hace un mes» (desde entonces hasta hoy)
+  x = _busca(RegExp(r'\b(desde )?hace (\d+|un|una|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|quince|veinte|treinta) (dias?|semanas?|mes|meses)\b'), t);
+  if (x != null) {
+    final n = int.tryParse(x[2]!) ?? _numPalabra[x[2]] ?? _numeros[x[2]]!;
+    final unidad = x[3]!;
+    final dias = n * (unidad.startsWith('dia') ? 1 : unidad.startsWith('semana') ? 7 : 30);
+    final a = f.sumarDias(hoy, -dias);
+    final r = x[1] != null || !unidad.startsWith('dia') ? _rango(a, hoy, 'desde el ${f.dmy(a)}') : _rango(a, a, 'el ${f.dmy(a)}');
+    return (r, _blank(t, x.start, x.end));
+  }
+  x = _busca(RegExp(r'\b(?:del?|entre)(?: el)? (\d{1,2}) (?:al?|y)(?: el)? (\d{1,2}) (?:de )?(' + _mesAlt + r')(?: (?:de|del) (\d{4}))?\b'), t);
   if (x != null) {
     var a = _fechaTexto(x[1]!, x[3]!, x[4], hoy), b = _fechaTexto(x[2]!, x[3]!, x[4], hoy);
     if (a.isAfter(b)) {
@@ -233,6 +280,9 @@ DateTime _maxF(Iterable<DateTime> l) => l.reduce((a, b) => b.isAfter(a) ? b : a)
       final a = _minF(ds), b = _maxF(ds);
       return (_rango(a, b, 'del ${f.dmy(a)} al ${f.dmy(b)}'), restos);
     }
+    // «del 1 de noviembre a la fecha», «desde el 5/10 hasta hoy»
+    final tras = RegExp(r'^\s*(?:a|al|hasta)(?: el dia de)? (?:la fecha|hoy|ahora)\b').firstMatch(t.substring(ord[0].$2));
+    if (tras != null) return (_rango(ds[0], hoy, 'desde el ${f.dmy(ds[0])}'), _blank(restos, ord[0].$2, ord[0].$2 + tras.end));
     final desdeIdx = m.max(0, ord[0].$1 - 22);
     final antes = t.substring(desdeIdx, ord[0].$1);
     if (RegExp(r'(desde|a partir de|despues de)(?: el)? $').hasMatch(antes)) return (_rango(ds[0], hoy, 'desde el ${f.dmy(ds[0])}'), restos);
@@ -477,6 +527,7 @@ bool _tieneToken(String t, String tk) => RegExp(r'\b' + escapar(tk) + r'\b').has
     }
     if (r(r'\b(sin reservas|no reservaron|nunca reservaron)\b')) filtros.add({'col': 'reservas', 'op': '=', 'valor': 0});
   }
+  if (dsId == 'reservas' && _vinieron.hasMatch(t)) filtros.add({'col': 'estado', 'op': '=', 'valor': 'Consumida'});
   if (dsId == 'becas') {
     if (r(r'\b(inactiv\w+|sin usar|sin uso|no (?:la )?(?:usan|usaron|usa)|desaprovechad\w+)\b')) filtros.add({'col': 'usadas', 'op': '=', 'valor': 0});
     if (r(r'\b(no vigentes?|vencidas?|expiradas?)\b')) {
@@ -491,6 +542,7 @@ bool _tieneToken(String t, String tk) => RegExp(r'\b' + escapar(tk) + r'\b').has
 // ----------------------------- detección del conjunto de datos -----------------------------
 
 ({String? id, double score, List<(String, double)> ranking}) detectarDataset(String t) {
+  if (_vinieron.hasMatch(t) && !_delPersonal.hasMatch(t)) return (id: 'reservas', score: 5.0, ranking: [('reservas', 5.0)]);
   final compartidas = <String, int>{};
   for (final ds in Catalogo.datasets.values) {
     for (final c in (ds['columnas'] as List)) {
@@ -866,6 +918,46 @@ Mapa _resolverMedidaOrden(Mapa spec) {
   return spec;
 }
 
+// «quita la columna estado», «saca el método», «sin la columna estudiante», «agrega la matrícula»
+final _quitarCol = RegExp(
+    r'^(?:y |ahora |pero |tambien )?(?:quita(?:le|r)?|saca(?:le|r)?|elimina(?:le|r)?|borra(?:le|r)?|oculta(?:le|r)?|remueve|no (?:quiero ver|quiero|muestres|pongas)|sin)\b(.*)$');
+final _agregarCol = RegExp(r'^(?:y |ahora |pero |tambien )?(?:agrega(?:le|r)?|anade(?:le)?|pon(?:le|er)?|incluye|muestra(?:me)? tambien|quiero ver tambien)\b(.*)$');
+
+/// Quita o agrega columnas al reporte anterior. null si el pedido no es eso (p. ej. «sin beca» es un filtro).
+Mapa? _editarColumnas(String t, Map previa) {
+  if (((previa['agrupar'] as List?) ?? []).isNotEmpty || ((previa['medidas'] as List?) ?? []).isNotEmpty) return null;
+  if (RegExp(r'\bfiltros?\b').hasMatch(t)) return null;
+  final quitar = _quitarCol.firstMatch(t);
+  final agregar = quitar == null ? _agregarCol.firstMatch(t) : null;
+  final x = quitar ?? agregar;
+  if (x == null) return null;
+  if (RegExp(r'^(?:(?:y|ahora|pero|tambien) )?sin\b').hasMatch(t) && !RegExp(r'\bcolumnas?\b').hasMatch(t)) return null;
+  final nombres = <String>[];
+  for (final mm in menciones(x[1]!, previa['dataset'] as String)) {
+    if (!nombres.contains(mm.$3)) nombres.add(mm.$3);
+  }
+  if (nombres.isEmpty) return null;
+  final ds = Catalogo.datasets[previa['dataset']];
+  var cols = List<String>.from((previa['columnas'] as List?) ?? (ds['defecto'] as List));
+  if (quitar != null) {
+    cols = cols.where((c) => !nombres.contains(c)).toList();
+  } else {
+    for (final n in nombres) {
+      if (!cols.contains(n)) cols.add(n);
+    }
+  }
+  if (cols.isEmpty) throw NoEntendido('El reporte tiene que quedar con al menos una columna.');
+  final spec = jsonDecode(jsonEncode(previa)) as Mapa;
+  spec['columnas'] = [for (final c in (ds['columnas'] as List)) if (cols.contains(c['nombre'])) c['nombre'] as String]; // orden del catálogo
+  for (final (nombre, re) in _formatos) {
+    if (re.hasMatch(t)) {
+      spec['salida'] = nombre;
+      break;
+    }
+  }
+  return spec;
+}
+
 bool _esRefinamiento(String t) => RegExp(
         r'^(ahora|ademas|tambien|y |pero|mejor|solo|solamente|quitale|quita|agregale|agrega|ponle|pon |cambialo|cambia|ordenalo|ordena|filtralo|filtra|agrupalo|agrupa|muestrame tambien|que sea|en vez|en lugar)')
     .hasMatch(t);
@@ -896,6 +988,10 @@ Mapa interpretar(String texto, {Map? previa, DateTime? hoy, Map<String, dynamic>
   final t0 = corregirTipeos(norm(texto));
   if (t0.isEmpty) throw NoEntendido('Escribe o di qué reporte quieres.');
   if (RegExp(r'\b(nuevo reporte|otro reporte|desde cero|empezar de nuevo|reiniciar)\b').hasMatch(t0)) previa = null;
+  final editado = previa != null && Catalogo.datasets.containsKey(previa['dataset']) ? _editarColumnas(t0, previa) : null;
+  if (editado != null) {
+    return {'spec': editado, 'entendi': entendido(editado), 'notas': <String>[], 'confianza': 1, 'continuacion': true, 'alternativas': <String>[]};
+  }
   final det = detectarDataset(t0);
   var dsId = det.id;
   var refina = false;

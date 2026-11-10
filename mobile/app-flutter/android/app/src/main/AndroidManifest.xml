@@ -3,6 +3,8 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Micrófono para dictar los reportes (solo mientras se toca «Dictar») -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <!-- Android 13 exige pedir permiso para mostrar notificaciones -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <application
@@ -48,6 +50,10 @@
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
+        </intent>
+        <!-- Android 11+: sin esto la app no ve el reconocedor de voz del teléfono y el dictado no arranca -->
+        <intent>
+            <action android:name="android.speech.RecognitionService"/>
         </intent>
     </queries>
 </manifest>

@@ -1,0 +1,189 @@
+REPORTES EN EL CELULAR - QUÉ SE LE PUEDE PEDIR
+===============================================
+
+Pantalla «Reportes» de la app móvil. Se escribe o se dicta (micrófono) en español normal.
+El pedido se interpreta y se calcula EN EL TELÉFONO, también sin internet, con la copia de datos que
+descargó la última vez que tuvo red. El dictado envía el pedido cuando te quedas callado 3 segundos.
+
+Todas las frases de este archivo se probaron con el motor de reportes (el del celular es el mismo).
+
+No hace falta escribir bien: entiende sin tildes, con faltas de ortografía ("novienbre", "ocutbre",
+"canseladas"), con "x" en lugar de "por", con relleno ("eh mostrame ... porfa") y en mayúsculas o minúsculas.
+
+
+1. QUÉ DATOS SE PUEDEN CONSULTAR (y palabras que los activan)
+-------------------------------------------------------------
+
+RESERVAS DE RACIONES  (reservas, raciones, comidas, pedidos, servidas, comensales)
+  Columnas: fecha, turno, plato, estado, estudiante, matrícula, reservada el
+  - cuántas raciones se reservaron por mes
+  - reservas de almuerzo de noviembre ordenadas por fecha en excel
+  - los 5 platos más reservados
+  - reservas de hoy
+  - cuantas reservas hubo ayer
+  - reservas por turno
+  - reservas x dia
+  - que plato se reservo mas
+  - reservas canceladas
+  - reservas de la cena de esta semana
+  - reservas confirmadas / pendientes / consumidas de octubre
+
+PAGOS Y RECAUDACIÓN  (pagos, cobros, ingresos, recaudación, ventas, dinero, plata, bolivianos, tickets)
+  Columnas: fecha, estudiante, monto (Bs), método de pago, estado, reserva, ticket
+  - total cobrado por mes
+  - cuanto se cobro este mes
+  - plata que entro en octubre
+  - total recaudado
+  - recaudación por método de pago en excel
+  - pagos x metodo
+  - pagos mayores a 5 bolivianos de este mes en pdf
+  - los pagos mas grandes
+  - pagos con qr
+  - pagos en efectivo de hoy y ayer
+  - pagos devueltos / pagos fallidos
+  - pagos de ocutbre ordenados del mayor al menor
+  - ingresos de la semana pasada
+  - eh mostrame los pagos de los ultimos 15 dias porfa
+  - quiero saber cuanto cobramos por mes este año en excel
+
+ESTUDIANTES  (estudiantes, alumnos, padrón, registrados, matriculados)
+  Columnas: matrícula, nombre, correo, teléfono, beca, reservas, pagado (Bs)
+  - lista de estudiantes
+  - estudiantes con beca
+  - estudiantes becados
+  - estudiantes sin beca ordenados por nombre en excel
+  - estudiantes sin reservas  (también: "que no reservaron", "nunca reservaron")
+  - los 10 estudiantes que más reservaron
+  - top 3 estudiantes que mas reservan
+
+BECAS  (becas, becarios, becados)
+  Columnas: estudiante, matrícula, tipo de beca, cupo mensual, raciones usadas, raciones disponibles,
+            uso (%), vigente desde, vigente hasta, vigente
+  - becas por tipo
+  - becarios
+  - quienes tienen beca completa
+  - becas con menos uso
+  - becas que se estan usando poco
+  - becarios inactivos  (también: "sin usar", "no la usan", "desaprovechadas")
+  - becas vigentes / becas no vigentes  (también: "expiradas")
+
+MENÚS Y CUPOS  (menús, platos, cupos, porciones, disponibles, ocupación)
+  Columnas: fecha, turno, plato, cupo, apartadas, disponibles, ocupación (%)
+  - menus de la semana
+  - platos más pedidos de la semana
+  - ranking de platos mas pedidos
+  - ocupación por plato
+  - ocupación promedio por plato en excel
+  - que menu se lleno mas
+  - menús con menos cupos disponibles
+  - cupos libres de mañana
+
+INSUMOS E INVENTARIO  (insumos, inventario, stock, almacén, ingredientes, productos, lotes, vencimiento)
+  Columnas: insumo, unidad, stock actual, stock mínimo, estado, lotes, próximo vencimiento, días para vencer
+  - stock
+  - insumos con stock bajo  (también: "que insumos faltan", "agotados", "por reponer")
+  - insumos a punto de vencer  (también: "por vencer", "próximos a vencer": los próximos 7 días)
+  - insumos vencidos
+  - insumos que vencen en los próximos 7 días
+  - inventario ordenado por stock ascendente en pdf
+
+ASISTENCIA DEL PERSONAL  (asistencia, marcas, marcaciones, entradas, salidas, personal, empleados, cocineros)
+  Columnas: fecha, hora, persona, rol, tipo de marca, distancia (m), ubicación, para revisar
+  - asistencia del personal
+  - asistencia del personal de este mes
+  - quien marco entrada hoy
+  - cuántas marcas por persona
+  - entradas por día de la semana
+  - marcas sospechosas
+  - marcas fuera del comedor  (las marcas viejas; ahora fuera del radio ya no se registran)
+
+DESPERDICIO - FOTOS DE BANDEJAS  (desperdicio, sobrante, sobras, merma, bandejas, restos,
+                                   "comida que se tira", "se bota", "lo que dejan en el plato")
+  Columnas: fecha, turno, plato, sobrante (%), comido (%), confianza (%)
+  - desperdicio por plato
+  - desperdicio promedio por plato
+  - los 5 platos con más desperdicio
+  - plato con mas sobras
+  - cuanta comida se tira
+  - sobrante por mes en excel
+
+
+2. FECHAS Y PERÍODOS
+--------------------
+  hoy · ayer · anteayer
+  esta semana · la semana pasada · la próxima semana
+  este mes · el mes pasado · el próximo mes
+  este año · el año pasado
+  últimos 15 días · últimas 2 semanas · últimos 3 meses · último mes · último año
+  próximos 7 días · próximos 2 meses
+  noviembre · noviembre de 2025 · de agosto a octubre · septiembre y octubre
+  (un mes sin año es el más reciente que ya empezó: en noviembre de 2026, "diciembre" es diciembre de 2025)
+  primer trimestre · segundo semestre de 2025 · este trimestre
+  2025 · desde 2025 · hasta 2025 · entre 2024 y 2025
+  el 15/10/2026 · del 1 al 15 de octubre · desde el 01/10/2026 · hasta el 10/11/2026
+  todo el historial · todas las fechas · histórico   (quita el período)
+  Si no se dice ningún período, se usan todos los registros (y la pantalla lo avisa).
+
+
+3. FILTROS
+----------
+  Por valor:     solo almuerzo · de la cena · confirmadas · pendientes · canceladas · efectivo · con qr · beca completa
+  Excluir:       sin beca · excepto almuerzo · reservas menos las canceladas · pagos no efectivo
+  Números:       mayores a 5 · más de 100 bolivianos · al menos 10 · como mínimo 3
+                 menores a 20 · menos de 50 · como máximo 10 · no más de 5
+  Del negocio:   stock bajo · por vencer · vencidos (insumos) · sin reservas · inactivos · vigentes · no vigentes
+
+
+4. AGRUPAR Y CALCULAR
+---------------------
+  Agrupar:    por día · por semana · por mes · por año · por turno · por plato · por estado · por método
+              por tipo · por persona · por día de la semana
+  Calcular:   total · suma · promedio · cuántos / cuántas · cantidad · máximo · mínimo
+  Ejemplos:   total cobrado por mes · promedio de desperdicio por plato · cuántas reservas por turno
+
+
+5. RANKINGS Y ORDEN
+-------------------
+  los 10 mayores · los 5 más pedidos · top 3 · ranking 10 · el mayor · el más caro
+  los 5 menores · los peores · el mínimo · el más barato
+  ordenado por fecha · ordenados por nombre · ascendente · descendente
+  de mayor a menor · de menor a mayor · ordenados por nombre de la a a la z
+
+
+6. QUÉ COLUMNAS VER
+-------------------
+  Se nombran en el pedido:  "quiero ver fecha, monto y estudiante de los pagos de noviembre"
+  Si no se nombran, salen las columnas habituales de ese dato.
+
+
+7. CÓMO SE ENTREGA
+------------------
+  en pantalla (por defecto) · en pdf · en excel  (también: xlsx, planilla, hoja de cálculo)
+  Ejemplo: "pagos de noviembre, los mayores primero, en Excel"
+  Los botones «⬇ PDF» y «⬇ Excel» descargan también lo que está en pantalla.
+
+
+8. SEGUIR LA CONVERSACIÓN
+-------------------------
+  Después de un reporte se puede seguir pidiendo sobre el mismo, sin repetir todo:
+    "pagos de este año"  ->  "ahora por mes"  ->  "solo efectivo"  ->  "los 5 mayores"  ->  "en excel"
+  Otros: "solo de almuerzo" · "sin las canceladas" · "ordenado por fecha" · "en pdf"
+  «Nuevo reporte» empieza de cero. Los «Recientes» repiten un pedido anterior con un toque.
+
+
+9. QUIÉN VE QUÉ (según el rol de la cuenta)
+-------------------------------------------
+  administrador:   todo
+  nutricionista:   menús, desperdicio, reservas, insumos
+  cocina/almacén:  insumos, menús, reservas, desperdicio, asistencia
+  caja:            pagos, reservas
+  Si se pide algo que el rol no puede ver, la app lo dice en vez de mostrarlo.
+
+
+10. LO QUE NO HACE
+------------------
+  - Cruzar dos datos en un mismo reporte (p. ej. pagos y desperdicio juntos): se piden por separado.
+  - Gráficos: solo resumen y tabla (y PDF / Excel).
+  - Predicciones: para eso está la vista «Predicción» del módulo de inteligencia de negocio.
+  - Sin internet usa la última copia descargada: lo registrado después no aparece hasta que vuelva la red
+    (botón «Actualizar»).
