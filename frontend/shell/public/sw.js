@@ -31,7 +31,7 @@ self.addEventListener('message', (e) => {
 async function redPrimero(req, respaldo) {
   const c = await caches.open(CACHE);
   try {
-    const r = await fetch(req);
+    const r = await fetch(req, { cache: 'no-cache' });   // red primero de verdad: sin la caché HTTP del navegador
     if (r.ok) await c.put(respaldo || req, r.clone());
     return r;
   } catch {
