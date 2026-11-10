@@ -4,7 +4,6 @@ const { fmtValor } = require('./motor');
 const { dmyIso } = require('./fechas');
 
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-const PALETA = ['#f97316', '#06b6d4', '#8b5cf6', '#10b981', '#ef4444', '#eab308'];
 
 function nombreArchivo(titulo, ext) {
   const base = String(titulo).toLowerCase().normalize ? String(titulo).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '') : String(titulo).toLowerCase();
@@ -19,52 +18,6 @@ const texto = (v, c) => {
   if (typeof v === 'number') return fmtValor(v, c.fmt);
   return dmyIso(v);
 };
-
-// ----------------------------- gráfico (SVG) -----------------------------
-
-function svgGrafico(res) {
-  const g = res.grafico;
-  if (!g || !res.filas.length || res.filas.length > 40) return '';
-  const W = 720, H = 230, L = 46, B = 52, T = 14, R = 12;
-  const etq = res.filas.map((f) => String(f[g.x] ?? ''));
-  const series = g.y.map((k) => res.filas.map((f) => Number(f[k]) || 0));
-  const leyenda = g.y.map((k, i) => `<tspan fill="${PALETA[i % 2]}">■ ${esc(g.etiquetas[k] || k)}  </tspan>`).join('');
-  if (g.tipo === 'torta') {
-    const total = series[0].reduce((a, b) => a + b, 0) || 1;
-    let ang = -Math.PI / 2;
-    const cx = 130, cy = 115, r = 90;
-    const trozos = series[0].map((v, i) => {
-      const a2 = ang + (v / total) * Math.PI * 2;
-      const x1 = cx + r * Math.cos(ang), y1 = cy + r * Math.sin(ang), x2 = cx + r * Math.cos(a2), y2 = cy + r * Math.sin(a2);
-      const d = v / total >= 0.9999 ? `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${PALETA[(i + 2) % 6]}"/>`
-        : `<path d="M${cx},${cy} L${x1},${y1} A${r},${r} 0 ${v / total > 0.5 ? 1 : 0} 1 ${x2},${y2} Z" fill="${PALETA[(i + 2) % 6]}"/>`;
-      ang = a2;
-      return d;
-    }).join('');
-    const leg = etq.map((e, i) => `<text x="260" y="${40 + i * 22}" font-size="12" fill="#334155"><tspan fill="${PALETA[(i + 2) % 6]}">■</tspan> ${esc(e)} (${series[0][i]})</text>`).join('');
-    return `<svg viewBox="0 0 ${W} ${H}" width="100%">${trozos}${leg}</svg>`;
-  }
-  const max = Math.max(...series.flat(), 1);
-  const iw = W - L - R, ih = H - T - B;
-  const y = (v) => T + ih - (v / max) * ih;
-  const ejes = [0, 0.25, 0.5, 0.75, 1].map((p) => `<line x1="${L}" x2="${W - R}" y1="${y(max * p)}" y2="${y(max * p)}" stroke="#e2e8f0"/><text x="${L - 6}" y="${y(max * p) + 3}" font-size="9" text-anchor="end" fill="#64748b">${Number((max * p).toFixed(1))}</text>`).join('');
-  const paso = iw / etq.length;
-  const marcas = etq.map((e, i) => {
-    const x = L + paso * i + paso / 2;
-    return `<text transform="translate(${x},${H - B + 12}) rotate(${etq.length > 6 ? -30 : 0})" font-size="9" text-anchor="${etq.length > 6 ? 'end' : 'middle'}" fill="#475569">${esc(e.slice(0, 14))}</text>`;
-  }).join('');
-  let cuerpo;
-  if (g.tipo === 'lineas') {
-    cuerpo = series.map((s, k) => {
-      const pts = s.map((v, i) => `${L + paso * i + paso / 2},${y(v)}`).join(' ');
-      return `<polyline points="${pts}" fill="none" stroke="${PALETA[k % 2]}" stroke-width="2.5"/>` + s.map((v, i) => `<circle cx="${L + paso * i + paso / 2}" cy="${y(v)}" r="3" fill="${PALETA[k % 2]}"/>`).join('');
-    }).join('');
-  } else {
-    const ancho = Math.min(36, (paso * 0.7) / series.length);
-    cuerpo = series.map((s, k) => s.map((v, i) => `<rect x="${L + paso * i + paso / 2 - (ancho * series.length) / 2 + ancho * k}" y="${y(v)}" width="${ancho}" height="${T + ih - y(v)}" rx="2" fill="${PALETA[k % 2]}"/>`).join('')).join('');
-  }
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%">${ejes}${cuerpo}${marcas}<text x="${L}" y="${H - 4}" font-size="10">${leyenda}</text></svg>`;
-}
 
 // ----------------------------- PDF (HTML) -----------------------------
 
@@ -88,7 +41,6 @@ tr.t td { font-weight: bold; background: #fff7ed; border-top: 2px solid #1e293b;
 <div class="sub">Comedor Universitario UAGRM · generado el ${esc(res.generado)}</div>
 ${res.condiciones.length ? `<div class="sub">Condiciones: ${esc(res.condiciones.join('; '))}</div>` : ''}
 <ul class="res">${res.resumen.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>
-${svgGrafico(res)}
 ${res.filas.length ? `<table><thead><tr>${cab}</tr></thead><tbody>${filas}${total}</tbody></table>` : '<p>No hay datos que cumplan estas condiciones.</p>'}
 <div class="pie">Comedor Universitario UAGRM · ${esc(res.titulo)}</div>
 </body></html>`;

@@ -1,6 +1,10 @@
 // Reportes por texto o por voz, con IA LOCAL: el pedido en español lo interpreta y lo ejecuta este mismo teléfono
 // (lib/reportes/) contra una copia de los datos de tu rol guardada en el equipo. Por eso funciona SIN internet.
 // Con red, la copia se renueva sola; aquí se muestra la tabla y se descarga en PDF o Excel.
+// Dictado: el cuadro se llena mientras hablas y el pedido se manda recién tras 3 s de silencio (las pausas cortas no
+// lo mandan: si el teléfono corta el reconocimiento antes, se vuelve a escuchar y se sigue sumando el texto).
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 
@@ -37,14 +41,34 @@ class _ReportesState extends State<Reportes> {
   bool _bajando = false;
   Copia? _copia;                  // la copia de datos que usa la IA local
   String? _localeVoz;             // español disponible en el teléfono
+  static const _silencioParaEnviar = Duration(seconds: 3);
+  Timer? _silencio;               // corre desde la última palabra escuchada
+  bool _dictando = false;         // el usuario sigue dictando (no tocó detener ni pasaron 3 s callado)
+  String _frasesCerradas = '';    // lo que el reconocedor ya dio por terminado en tramos anteriores
+  String _fraseActual = '';
+
+  String get _textoDictado => '$_frasesCerradas $_fraseActual'.replaceAll(RegExp(r'\s+'), ' ').trim();
 
   @override
   void initState() {
     super.initState();
     _voz.initialize(onStatus: (s) {
-      if (s == 'done' || s == 'notListening') if (mounted) setState(() => _escuchando = false);
+      if ((s != 'done' && s != 'notListening') || !mounted) return;
+      if (_dictando && (_silencio?.isActive ?? false)) {
+        // el teléfono cortó en una pausa corta: se sigue escuchando y sumando
+        Future.delayed(const Duration(milliseconds: 150), () {
+          if (mounted && _dictando && !_voz.isListening) _escucharTramo();
+        });
+      } else if (_dictando && _textoDictado.isEmpty) {
+        _dictando = false;
+        setState(() => _escuchando = false);
+      } else if (!_dictando) {
+        setState(() => _escuchando = false);
+      }
     }, onError: (e) {
-      if (mounted) setState(() { _escuchando = false; _error = _mensajeVoz(e.errorMsg); });
+      if (!mounted || (_dictando && _textoDictado.isNotEmpty)) return;   // con texto ya dictado se ignoran cortes
+      _dictando = false;
+      setState(() { _escuchando = false; _error = _mensajeVoz(e.errorMsg); });
     }).then((ok) async {
       if (!ok || !mounted) return;
       final ls = await _voz.locales();
@@ -91,6 +115,9 @@ class _ReportesState extends State<Reportes> {
 
   @override
   void dispose() {
+    _silencio?.cancel();
+    _dictando = false;
+    _voz.stop();
     _texto.dispose();
     super.dispose();
   }
@@ -103,9 +130,10 @@ class _ReportesState extends State<Reportes> {
 
   Future<void> _generar(String? t, {bool continuar = true, String? fmt}) async {
     final q = (t ?? _texto.text).trim();
-    if (q.isEmpty) return;
+    if (q.isEmpty || _cargando) return;                 // no se manda dos veces mientras se calcula
     FocusScope.of(context).unfocus();
     setState(() { _cargando = true; _error = ''; _aviso = ''; });
+    await Future.delayed(const Duration(milliseconds: 30));   // deja pintar el botón deshabilitado antes de calcular
     try {
       Map<String, dynamic>? anterior;        // la consulta anterior, para seguir la conversación
       if (continuar) anterior = _res?['spec'] as Map<String, dynamic>?;
@@ -145,23 +173,51 @@ class _ReportesState extends State<Reportes> {
   }
 
   Future<void> _alternarMic() async {
-    if (_escuchando) {
+    if (_escuchando) {                      // detener a mano: no se manda, el texto queda para corregirlo
+      _dictando = false;
+      _silencio?.cancel();
       await _voz.stop();
       setState(() => _escuchando = false);
       return;
     }
+    _frasesCerradas = '';
+    _fraseActual = '';
+    _dictando = true;
     setState(() { _error = ''; _escuchando = true; });
+    await _escucharTramo();
+  }
+
+  Future<void> _escucharTramo() async {
     await _voz.listen(
       // sin internet se pide el reconocimiento del propio teléfono (necesita el paquete de español instalado)
-      listenOptions: SpeechListenOptions(partialResults: true, onDevice: !widget.enLinea, localeId: _localeVoz),
+      listenOptions: SpeechListenOptions(partialResults: true, onDevice: !widget.enLinea, localeId: _localeVoz,
+          listenMode: ListenMode.dictation, cancelOnError: false,
+          listenFor: const Duration(minutes: 1), pauseFor: _silencioParaEnviar),
       onResult: (r) {
-        setState(() => _texto.text = r.recognizedWords);
-        if (r.finalResult) {
-          setState(() => _escuchando = false);
-          _generar(r.recognizedWords);
+        if (!_dictando) return;
+        _fraseActual = r.recognizedWords;
+        if (r.finalResult) {               // el tramo terminó, pero se sigue esperando los 3 s de silencio
+          _frasesCerradas = _textoDictado;
+          _fraseActual = '';
+        }
+        setState(() => _texto.text = _textoDictado);
+        if (r.recognizedWords.trim().isNotEmpty) {
+          _silencio?.cancel();
+          _silencio = Timer(_silencioParaEnviar, _terminoDeHablar);
         }
       },
     );
+  }
+
+  /// 3 s sin palabras nuevas: se deja de escuchar y se manda lo dictado.
+  Future<void> _terminoDeHablar() async {
+    if (!_dictando) return;
+    _dictando = false;
+    final t = _textoDictado;
+    await _voz.stop();
+    if (!mounted) return;
+    setState(() => _escuchando = false);
+    if (t.isNotEmpty) _generar(t);
   }
 
   @override
@@ -230,7 +286,8 @@ class _ReportesState extends State<Reportes> {
             Expanded(
               child: TextField(
                 controller: _texto, maxLines: 3, minLines: 3, textInputAction: TextInputAction.done,
-                onSubmitted: (_) => _generar(null, fmt: _formato),
+                readOnly: _escuchando || _cargando,
+                onSubmitted: (_) => _escuchando ? null : _generar(null, fmt: _formato),
                 decoration: const InputDecoration(hintText: 'Ej.: pagos de noviembre, los mayores primero, en Excel'),
               ),
             ),
@@ -238,7 +295,7 @@ class _ReportesState extends State<Reportes> {
             SizedBox(
               width: 74, height: 84,
               child: FilledButton(
-                onPressed: _hayVoz ? _alternarMic : null,
+                onPressed: _hayVoz && !_cargando ? _alternarMic : null,
                 style: FilledButton.styleFrom(backgroundColor: _escuchando ? C.rojo : C.tarjeta2, padding: EdgeInsets.zero),
                 child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
                   Icon(_escuchando ? Icons.stop : Icons.mic, size: 26, color: Colors.white),
@@ -251,6 +308,10 @@ class _ReportesState extends State<Reportes> {
             const Padding(padding: EdgeInsets.only(top: 6),
                 child: Text('El dictado necesita permiso de micrófono. Mientras tanto, escribe tu pedido.',
                     style: TextStyle(color: C.tenue, fontSize: 11.5))),
+          if (_escuchando)
+            const Padding(padding: EdgeInsets.only(top: 6),
+                child: Text('Habla tranquilo: se envía solo cuando te quedes callado 3 segundos. Toca ■ para parar sin enviar.',
+                    style: TextStyle(color: C.rojo, fontSize: 11.5))),
           const Etiqueta('Ver en', arriba: 14),
           Wrap(spacing: 8, runSpacing: 8, children: [
             for (final f in const [['pantalla', 'Pantalla'], ['pdf', 'PDF'], ['excel', 'Excel']])
@@ -258,7 +319,7 @@ class _ReportesState extends State<Reportes> {
           ]),
           const SizedBox(height: 12),
           FilledButton(
-            onPressed: _cargando ? null : () => _generar(null, fmt: _formato),
+            onPressed: _cargando || _escuchando ? null : () => _generar(null, fmt: _formato),
             child: _cargando
                 ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                 : const Text('Generar reporte'),

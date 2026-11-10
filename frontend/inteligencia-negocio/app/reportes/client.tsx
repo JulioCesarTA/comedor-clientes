@@ -3,16 +3,14 @@
 // (lib/reportes/local.ts) contra una copia de los datos de tu rol que se guarda en el equipo. Por eso funciona SIN
 // internet. El motor es el mismo que el del servidor y el del teléfono (la paridad se comprueba con un test).
 import { useEffect, useRef, useState } from 'react';
-import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Card } from '../components/Charts';
 import { aHtml, aXlsxBase64, dmyIso, fmtValor, nombreArchivo } from '../lib/reportes/exportar';
 import { guardar, leerGuardado } from '../lib/reportes/datos';
 import { ayuda as ayudaLocal, consultar, ejecutarSpec, preparar } from '../lib/reportes/local';
-import { crearDictado, vozDisponible, Dictado } from '../lib/reportes/voz';
+import { crearDictado, vozDisponible, Dictado, SILENCIO_MS } from '../lib/reportes/voz';
 
 const FORMATOS: [string, string][] = [['pantalla', 'Pantalla'], ['pdf', 'PDF'], ['excel', 'Excel']];
 const POR: [string, string][] = [['dia', 'Día'], ['semana', 'Semana'], ['mes', 'Mes'], ['anio', 'Año']];
-const PALETA = ['#f97316', '#06b6d4', '#8b5cf6', '#10b981', '#ef4444', '#eab308'];
 const MAX_FILAS_TABLA = 300;
 
 type Columna = { key: string; label: string; tipo: string; fmt?: string };
@@ -52,32 +50,6 @@ async function exportar(res: Reporte, formato: string) {
     f.srcdoc = aHtml(res);
     f.onload = () => { f.contentWindow?.focus(); f.contentWindow?.print(); setTimeout(() => f.remove(), 60000); };
   }
-}
-
-function Grafica({ res }: { res: Reporte }) {
-  const g = res.grafico;
-  if (!g || !res.filas.length || res.filas.length > 40) return null;
-  const datos = res.filas.map((f: any) => ({ x: String(f[g.x] ?? ''), ...Object.fromEntries(g.y.map((k: string) => [k, Number(f[k]) || 0])) }));
-  const eje = { stroke: '#64748b', fontSize: 11 };
-  const tip = { contentStyle: { background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 12 } };
-  return (
-    <div className="h-72 mb-4">
-      <ResponsiveContainer width="100%" height="100%">
-        {g.tipo === 'torta' ? (
-          <PieChart>
-            <Pie data={datos} dataKey={g.y[0]} nameKey="x" outerRadius="80%" label>{datos.map((_: any, i: number) => <Cell key={i} fill={PALETA[(i + 2) % 6]} />)}</Pie>
-            <Tooltip {...tip} /><Legend />
-          </PieChart>
-        ) : g.tipo === 'lineas' ? (
-          <LineChart data={datos}><CartesianGrid stroke="#1e293b" /><XAxis dataKey="x" {...eje} /><YAxis {...eje} /><Tooltip {...tip} /><Legend />
-            {g.y.map((k: string, i: number) => <Line key={k} type="monotone" dataKey={k} name={g.etiquetas[k] || k} stroke={PALETA[i % 2]} strokeWidth={2.5} dot={{ r: 3 }} />)}</LineChart>
-        ) : (
-          <BarChart data={datos}><CartesianGrid stroke="#1e293b" /><XAxis dataKey="x" {...eje} /><YAxis {...eje} /><Tooltip {...tip} /><Legend />
-            {g.y.map((k: string, i: number) => <Bar key={k} dataKey={k} name={g.etiquetas[k] || k} fill={PALETA[i % 2]} radius={[3, 3, 0, 0]} />)}</BarChart>
-        )}
-      </ResponsiveContainer>
-    </div>
-  );
 }
 
 function Tabla({ res }: { res: Reporte }) {
@@ -153,10 +125,13 @@ export function ReportesIA() {
     catch (e: any) { setAviso(''); setError('No pude generar el archivo: ' + (e.message || e)); }
   };
 
-  const generar = (t?: string, opc: { continuar?: boolean; fmt?: string } = {}) => {
+  const enviando = useRef(false);
+  const generar = async (t?: string, opc: { continuar?: boolean; fmt?: string } = {}) => {
     const q = (t === undefined ? texto : t).trim();
-    if (!q) return;
+    if (!q || enviando.current) return;                 // no se manda dos veces mientras se calcula
+    enviando.current = true;
     setError(''); setAviso(''); setCargando(true);
+    await new Promise(r => setTimeout(r, 30));          // deja pintar el botón deshabilitado antes de calcular
     try {
       const r = consultar(q, opc.continuar === false ? null : res?.spec) as Reporte;      // se calcula aquí, sin red
       setRes(r); guardar('ultimo', r); recordar(q);
@@ -164,9 +139,9 @@ export function ReportesIA() {
       setFormato(f);
       if (f !== 'pantalla') bajar(r, f);
     } catch (e: any) { setError(e.message || String(e)); }
-    finally { setCargando(false); }
+    finally { setCargando(false); enviando.current = false; }
   };
-  generarRef.current = (t: string) => generar(t);
+  generarRef.current = (t: string) => { generar(t); };
 
   // Los ajustes rápidos reejecutan la misma consulta (también en este navegador) con el spec cambiado
   const aplicar = (nuevo: any) => {
@@ -180,7 +155,8 @@ export function ReportesIA() {
     if (escuchando) { dictado.current?.detener(); return; }
     if (!dictado.current) {
       dictado.current = crearDictado({
-        onTexto: (t, final) => { setTexto(t); if (final) generarRef.current(t); },
+        onTexto: t => setTexto(t),                                    // se va llenando mientras hablas
+        onListo: t => { setEscuchando(false); generarRef.current(t); }, // se manda tras 3 s de silencio
         onFin: () => setEscuchando(false),
         onError: m => { setEscuchando(false); setError(m); },
       });
@@ -217,21 +193,22 @@ export function ReportesIA() {
           </div>
         )}
         <div className="flex gap-3">
-          <textarea value={texto} onChange={e => setTexto(e.target.value)} rows={3}
-            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); generar(undefined, { fmt: formato }); } }}
+          <textarea value={texto} onChange={e => setTexto(e.target.value)} rows={3} readOnly={escuchando || cargando}
+            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!escuchando) generar(undefined, { fmt: formato }); } }}
             placeholder="Ej.: quiero ver fecha, monto y estudiante de los pagos de noviembre, los mayores primero, en Excel"
             className="flex-1 px-4 py-3 bg-slate-900 border border-slate-700 text-white rounded-lg focus:outline-none focus:border-orange-500 resize-none" />
-          <button onClick={alternarMic} disabled={!hayVoz} title={hayVoz ? 'Dictar' : 'Este navegador no permite dictado: usa Chrome o Edge'}
+          <button onClick={alternarMic} disabled={!hayVoz || cargando} title={hayVoz ? 'Dictar' : 'Este navegador no permite dictado: usa Chrome o Edge'}
             className={'w-24 rounded-lg border flex flex-col items-center justify-center text-white disabled:opacity-40 ' + (escuchando ? 'bg-red-500 border-red-500' : 'bg-slate-800 border-slate-700 hover:border-slate-500')}>
             <span className="text-2xl">{escuchando ? '■' : '🎤'}</span>
             <span className="text-[11px] mt-0.5">{escuchando ? 'Escuchando…' : 'Dictar'}</span>
           </button>
         </div>
         {!hayVoz && <p className="text-xs text-slate-500 mt-2">El dictado necesita Chrome o Edge. Mientras tanto, escribe tu pedido.</p>}
+        {escuchando && <p className="text-xs text-red-300 mt-2">Habla tranquilo: se envía solo cuando te quedes callado {SILENCIO_MS / 1000} segundos. Toca ■ para parar sin enviar.</p>}
         <div className="flex flex-wrap items-center gap-2 mt-4">
           <span className="text-xs text-slate-400 mr-1">Ver en</span>
           {FORMATOS.map(([k, n]) => <Chip key={k} texto={n} activo={formato === k} onClick={() => setFormato(k)} />)}
-          <button onClick={() => generar(undefined, { fmt: formato })} disabled={cargando || !texto.trim()}
+          <button onClick={() => generar(undefined, { fmt: formato })} disabled={cargando || escuchando || !texto.trim()}
             className="ml-auto px-5 py-2 rounded-lg font-semibold text-white bg-gradient-to-r from-orange-500 to-amber-600 disabled:opacity-50">
             {cargando ? 'Calculando…' : 'Generar reporte'}
           </button>
@@ -278,7 +255,6 @@ export function ReportesIA() {
                 <button key={k} onClick={() => bajar(res, k)} className="px-4 py-1.5 rounded-lg border border-slate-700 bg-slate-800 text-sm text-slate-100 hover:border-orange-500">⬇ {n}</button>
               ))}
             </div>
-            <Grafica res={res} />
             <Tabla res={res} />
           </Card>
         </>
