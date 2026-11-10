@@ -46,84 +46,51 @@ function useSSO() {
 
 type Lugar = { lat: number; lon: number; radioM: number; actualizadoPor: string | null; actualizadoEn: string | null };
 
-/** Solo administrador: dónde está el comedor. Las marcas de asistencia por GPS solo valen dentro del radio. */
+/** Solo administrador: latitud y longitud del comedor. La asistencia (desde el celular) solo vale dentro de su radio. */
 function UbicacionComedor({ avisar }: { avisar: (m: string, k: 'ok' | 'err') => void }) {
   const [lugar, setLugar] = useState<Lugar | null>(null);
   const [lat, setLat] = useState('');
   const [lon, setLon] = useState('');
-  const [radio, setRadio] = useState('1000');
   const [guardando, setGuardando] = useState(false);
-  const [buscando, setBuscando] = useState(false);
 
-  const mostrar = (l: Lugar) => { setLugar(l); setLat(String(l.lat)); setLon(String(l.lon)); setRadio(String(l.radioM)); };
+  const mostrar = (l: Lugar) => { setLugar(l); setLat(String(l.lat)); setLon(String(l.lon)); };
   useEffect(() => {
     axios.get<Lugar>(`${API}/asistencia/lugar`).then(r => mostrar(r.data)).catch(e => avisar(motivoError(e), 'err'));
   }, []);
 
-  const aqui = () => {
-    if (!window.isSecureContext) {         // los navegadores solo dan el GPS en https o localhost
-      avisar('El navegador solo da la ubicación en páginas https: copia las coordenadas de Google Maps y escríbelas.', 'err'); return;
-    }
-    if (!navigator.geolocation) { avisar('Este navegador no da la ubicación.', 'err'); return; }
-    setBuscando(true);
-    navigator.geolocation.getCurrentPosition(
-      p => { setLat(p.coords.latitude.toFixed(6)); setLon(p.coords.longitude.toFixed(6)); setBuscando(false);
-        avisar(`Ubicación tomada (±${Math.round(p.coords.accuracy)} m). Revisa y pulsa Guardar.`, 'ok'); },
-      e => { setBuscando(false); avisar(e.code === 1 ? 'Permite la ubicación para esta página.' : 'No se pudo obtener la ubicación.', 'err'); },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
-    );
-  };
-
   const guardar = async () => {
-    const la = Number(lat.replace(',', '.')), lo = Number(lon.replace(',', '.')), r = Number(radio);
-    if (!Number.isFinite(la) || Math.abs(la) > 90 || !Number.isFinite(lo) || Math.abs(lo) > 180) {
-      avisar('Latitud entre -90 y 90 y longitud entre -180 y 180 (ej.: -17.80497, -63.15052).', 'err'); return;
+    const la = Number(lat.replace(',', '.')), lo = Number(lon.replace(',', '.'));
+    if (!lat.trim() || !lon.trim() || !Number.isFinite(la) || Math.abs(la) > 90 || !Number.isFinite(lo) || Math.abs(lo) > 180) {
+      avisar('Latitud entre -90 y 90 y longitud entre -180 y 180 (ej.: -17.80497 y -63.15052).', 'err'); return;
     }
     setGuardando(true);
     try {
-      const { data } = await axios.put<Lugar>(`${API}/asistencia/lugar`, { lat: la, lon: lo, radioM: r });
+      const { data } = await axios.put<Lugar>(`${API}/asistencia/lugar`, { lat: la, lon: lo });
       mostrar(data);
-      avisar('Ubicación del comedor guardada: las marcas de asistencia se comparan con este punto.', 'ok');
+      avisar('Ubicación del comedor guardada.', 'ok');
     } catch (e: any) {
       avisar(e.response?.data?.message || motivoError(e), 'err');
     } finally { setGuardando(false); }
   };
 
   const campo = 'w-full px-3 py-2 bg-slate-900 border border-slate-700 text-white rounded-lg text-sm font-mono focus:outline-none focus:border-cyan-500';
-  const cambiado = lugar && (String(lugar.lat) !== lat || String(lugar.lon) !== lon || String(lugar.radioM) !== radio);
+  const cambiado = !!lugar && (String(lugar.lat) !== lat || String(lugar.lon) !== lon);
   return (
     <div className="mt-5 bg-slate-900/50 border border-slate-700 rounded-xl p-5">
-      <div className="flex items-center justify-between gap-3 mb-1">
-        <h3 className="text-white font-semibold">Ubicación del comedor <span className="ml-2 text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-orange-500/20 text-orange-300">solo administrador</span></h3>
-        {lugar && <a href={`https://www.google.com/maps?q=${lugar.lat},${lugar.lon}`} target="_blank" rel="noreferrer" className="text-xs text-cyan-400 hover:text-cyan-300">Ver en el mapa ↗</a>}
-      </div>
+      <h3 className="text-white font-semibold mb-1">Ubicación del comedor <span className="ml-2 text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-orange-500/20 text-orange-300">solo administrador</span></h3>
       <p className="text-xs text-slate-400 mb-4">
-        La asistencia por GPS solo se registra si la persona está dentro del radio de este punto; fuera de él, no se marca.
+        La asistencia marcada desde el celular solo se registra si la persona está a menos de {lugar ? `${lugar.radioM} m` : '1 km'} de este punto.
       </p>
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <label className="block"><span className="block text-[11px] text-slate-400 mb-1">Latitud</span>
           <input value={lat} onChange={e => setLat(e.target.value)} inputMode="decimal" placeholder="-17.80497" className={campo} /></label>
         <label className="block"><span className="block text-[11px] text-slate-400 mb-1">Longitud</span>
           <input value={lon} onChange={e => setLon(e.target.value)} inputMode="decimal" placeholder="-63.15052" className={campo} /></label>
-        <label className="block"><span className="block text-[11px] text-slate-400 mb-1">Radio (metros)</span>
-          <input value={radio} onChange={e => setRadio(e.target.value.replace(/\D/g, ''))} inputMode="numeric" placeholder="1000" className={campo} /></label>
       </div>
-      <div className="flex flex-wrap gap-2 mt-4">
-        <button onClick={aqui} disabled={buscando || guardando}
-          className="px-4 py-2 rounded-lg text-sm bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-slate-100">
-          {buscando ? 'Buscando…' : '📍 Usar mi ubicación actual'}
-        </button>
-        <button onClick={guardar} disabled={guardando || !lat || !lon || !radio || !cambiado}
-          className="px-5 py-2 rounded-lg text-sm font-semibold bg-gradient-to-r from-orange-500 to-amber-600 disabled:opacity-40 text-white">
-          {guardando ? 'Guardando…' : 'Guardar'}
-        </button>
-      </div>
-      {lugar && (
-        <div className="text-[11px] text-slate-500 mt-3">
-          Vigente: {lugar.lat}, {lugar.lon} · radio {lugar.radioM} m
-          {lugar.actualizadoPor ? ` · fijada por ${lugar.actualizadoPor}${lugar.actualizadoEn ? ' el ' + new Date(lugar.actualizadoEn).toLocaleString('es-BO') : ''}` : ' · valor inicial (todavía no se guardó ninguna)'}
-        </div>
-      )}
+      <button onClick={guardar} disabled={guardando || !cambiado}
+        className="mt-4 px-5 py-2 rounded-lg text-sm font-semibold bg-gradient-to-r from-orange-500 to-amber-600 disabled:opacity-40 text-white">
+        {guardando ? 'Guardando…' : 'Guardar'}
+      </button>
     </div>
   );
 }
