@@ -155,34 +155,30 @@ app.get('/usuarios', requireAuth, async (req, res) => {
 
 // En http-proxy-middleware v3 usamos pathFilter: así el request completo (/menus/semana/...)
 // llega sin que express.use lo recorte y Spring Boot lo matchea bien.
-const proxyAll = (patterns, target) => createProxyMiddleware({
+// `onProxyReq` fija cabeceras en la petición YA saliente: mutar `req.headers` antes no basta,
+// porque esta versión arma la petición al servicio por su cuenta y no siempre la recoge
+// (se vio en vivo: el gateway nunca mandaba x-roles/x-usuario a /asistencia/lugar).
+const proxyAll = (patterns, target, onProxyReq) => createProxyMiddleware({
   pathFilter: patterns,
   target,
   changeOrigin: true,
+  on: onProxyReq ? { proxyReq: onProxyReq } : undefined,
 });
+
+/** Cabeceras con quién es y qué rol tiene, según el token verificado (el cliente no puede fijarlas). */
+const conUsuarioYRoles = (proxyReq, req) => {
+  if (!req.user) return;
+  proxyReq.setHeader('x-roles', (req.user.realm_access?.roles || []).join(','));
+  proxyReq.setHeader('x-usuario', req.user.preferred_username || '');
+};
 
 // Núcleo del negocio del back-office (SPEC §4): /graphql va al gateway federado, con el mismo control de token.
 app.use(requireAuth, proxyAll(['/graphql'], GRAPHQL_URL));
 app.use(requireAuth, proxyAll(['/menus/**', '/insumos/**'], MENU_URL));
 // Asistencia: quién es y qué rol tiene salen del token (solo el administrador cambia la ubicación del comedor).
-app.use('/asistencia', requireAuth, (req, res, next) => {
-  if (req.user) {
-    req.headers['x-roles'] = (req.user.realm_access?.roles || []).join(',');
-    req.headers['x-usuario'] = req.user.preferred_username || '';
-  } else {
-    delete req.headers['x-roles'];
-    delete req.headers['x-usuario'];
-  }
-  next();
-});
-app.use(requireAuth, proxyAll(['/reservas/**', '/estudiantes/**', '/ingreso/**', '/asistencia/**'], COMENSALES_URL));
+app.use(requireAuth, proxyAll(['/reservas/**', '/estudiantes/**', '/ingreso/**', '/asistencia/**'], COMENSALES_URL, conUsuarioYRoles));
 app.use(requireAuth, proxyAll(['/pagos/**', '/facturas/**'], PAGOS_URL));
 // El rol sale del token (no del cliente): el servicio de IA lo usa para decidir qué datos entrega a los reportes.
-app.use('/reportes', requireAuth, (req, res, next) => {
-  if (req.user) req.headers['x-roles'] = (req.user.realm_access?.roles || []).join(',');
-  else delete req.headers['x-roles'];
-  next();
-});
-app.use(requireAuth, proxyAll(['/ml/**', '/agentes/**', '/reportes/**', '/sagas/**'], IA_URL));
+app.use(requireAuth, proxyAll(['/ml/**', '/agentes/**', '/reportes/**', '/sagas/**'], IA_URL, conUsuarioYRoles));
 
 app.listen(PORT, () => console.log(`[api-gateway] listo en :${PORT}`));
