@@ -82,6 +82,7 @@ List<Map<String, dynamic>> _columnas(String dsId) => ((Catalogo.datasets[dsId]['
 
 // ----------------------------- corrección de tipeos -----------------------------
 
+/// Errores entre dos palabras; cambiar de lugar dos letras seguidas ("ocutbre") cuenta como UN error.
 int _distancia(String a, String b) {
   final d = List.generate(a.length + 1, (i) => [i, ...List.filled(b.length, 0)]);
   for (var j = 1; j <= b.length; j++) {
@@ -90,10 +91,15 @@ int _distancia(String a, String b) {
   for (var i = 1; i <= a.length; i++) {
     for (var j = 1; j <= b.length; j++) {
       d[i][j] = m.min(m.min(d[i - 1][j] + 1, d[i][j - 1] + 1), d[i - 1][j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1));
+      if (i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1]) {
+        d[i][j] = m.min(d[i][j], d[i - 2][j - 2] + 1);
+      }
     }
   }
   return d[a.length][b.length];
 }
+
+const _parecidoMinimo = 0.85; // una palabra de 7 letras con un error (0.857) ya se corrige
 
 List<String> _construirVocab() {
   final v = <String>{
@@ -101,6 +107,10 @@ List<String> _construirVocab() {
     'ascendente', 'descendente', 'promedio', 'mayores', 'menores', 'ordenado', 'ordenados', 'agrupado', 'desperdicio', 'cuantos', 'cuantas',
     'cantidad', 'reporte', 'mostrar', 'ultimos', 'ultimas', 'trimestre', 'semestre', 'bolivianos', 'estudiantes', 'reservas', 'raciones',
     'pagos', 'becas', 'menus', 'insumos', 'total', 'maximo', 'minimo', 'ayer',
+    // valores que la gente escribe (estados, métodos, turnos, tipos): sin ellos "canseladas" no se corrige
+    'cancelada', 'canceladas', 'confirmada', 'confirmadas', 'consumida', 'consumidas', 'pendiente', 'pendientes',
+    'cobrado', 'cobrados', 'devuelto', 'devueltos', 'fallido', 'fallidos', 'efectivo', 'tarjeta',
+    'almuerzo', 'desayuno', 'completa', 'parcial',
   };
   for (final ds in Catalogo.datasets.values) {
     for (final s in ds['sinonimos'] as List) {
@@ -137,7 +147,7 @@ String corregirTipeos(String t) {
   return t.split(' ').map((w) {
     if (w.length < 6 || !soloLetras.hasMatch(w) || _enVocab(w)) return w;
     String? mejor;
-    var mejorR = 0.86;
+    var mejorR = _parecidoMinimo;
     for (final v in _vocabulario()) {
       if ((v.length - w.length).abs() > 2) continue;
       var pre = 0;
@@ -423,11 +433,11 @@ bool _tieneToken(String t, String tk) => RegExp(r'\b' + escapar(tk) + r'\b').has
         continue;
       }
       final variantes = <String>{nv};
-      if (nv.contains('/')) {
-        nv.split('/').map((x) => x.trim()).where((x) => x.length >= 3).forEach(variantes.add);
+      if (nv.contains('/')) { // "QR / tarjeta": también vale "qr" o "tarjeta" sola
+        nv.split('/').map((x) => x.trim()).where((x) => x.length >= 2).forEach(variantes.add);
       }
       for (final va in variantes) {
-        if (va.length < 3 || (_sinPalabra.containsKey(va) && !t.contains(_sinPalabra[va]!))) continue;
+        if (va.length < (va == nv ? 3 : 2) || (_sinPalabra.containsKey(va) && !t.contains(_sinPalabra[va]!))) continue;
         final x = _busca(_reValor(va), t);
         if (x != null) {
           final antes = t.substring(m.max(0, x.start - 14), x.start);

@@ -46,20 +46,28 @@ function frases(c) {
 
 // ----------------------------- corrección de tipeos -----------------------------
 
+// Errores entre dos palabras; cambiar de lugar dos letras seguidas ("ocutbre") cuenta como UN error.
 function distancia(a, b) {
   const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
   for (let j = 1; j <= b.length; j++) d[0][j] = j;
   for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) {
     d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
   }
   return d[a.length][b.length];
 }
+
+const PARECIDO_MINIMO = 0.85;   // una palabra de 7 letras con un error (0.857) ya se corrige
 
 const construirVocab = () => {
   const v = new Set([...Object.keys(MESES), ...Object.keys(NUMEROS), ...Object.keys(TIEMPO), ...Object.keys(DIAS),
     'ascendente', 'descendente', 'promedio', 'mayores', 'menores', 'ordenado', 'ordenados', 'agrupado', 'desperdicio', 'cuantos', 'cuantas',
     'cantidad', 'reporte', 'mostrar', 'ultimos', 'ultimas', 'trimestre', 'semestre', 'bolivianos', 'estudiantes', 'reservas', 'raciones',
-    'pagos', 'becas', 'menus', 'insumos', 'total', 'maximo', 'minimo', 'ayer']);
+    'pagos', 'becas', 'menus', 'insumos', 'total', 'maximo', 'minimo', 'ayer',
+    // valores que la gente escribe (estados, métodos, turnos, tipos): sin ellos "canseladas" no se corrige
+    'cancelada', 'canceladas', 'confirmada', 'confirmadas', 'consumida', 'consumidas', 'pendiente', 'pendientes',
+    'cobrado', 'cobrados', 'devuelto', 'devueltos', 'fallido', 'fallidos', 'efectivo', 'tarjeta',
+    'almuerzo', 'desayuno', 'completa', 'parcial']);
   for (const ds of Object.values(DATASETS)) {
     ds.sinonimos.forEach((s) => norm(s).split(' ').forEach((w) => v.add(w)));
     ds.columnas.forEach((c) => frases(c).forEach((f) => f.split(' ').forEach((w) => v.add(w))));
@@ -76,7 +84,7 @@ const vocab = () => {
 function corregirTipeos(t) {
   return t.split(' ').map((w) => {
     if (w.length < 6 || !/^[a-z]+$/.test(w) || vocab().includes(w)) return w;
-    let mejor = null, mejorR = 0.86;
+    let mejor = null, mejorR = PARECIDO_MINIMO;
     for (const v of vocab()) {
       if (Math.abs(v.length - w.length) > 2) continue;
       let pre = 0;
@@ -278,9 +286,10 @@ function valores(t, dsId, rows, modo = 'resto') {
         return;
       }
       const variantes = new Set([nv]);
-      if (nv.includes('/')) nv.split('/').map((x) => x.trim()).filter((x) => x.length >= 3).forEach((x) => variantes.add(x));
+      // "QR / tarjeta": también vale "qr" o "tarjeta" sola
+      if (nv.includes('/')) nv.split('/').map((x) => x.trim()).filter((x) => x.length >= 2).forEach((x) => variantes.add(x));
       for (const va of variantes) {
-        if (va.length < 3 || (SIN_PALABRA[va] && !t.includes(SIN_PALABRA[va]))) continue;
+        if (va.length < (va === nv ? 3 : 2) || (SIN_PALABRA[va] && !t.includes(SIN_PALABRA[va]))) continue;
         const m = reValor(va).exec(t);
         if (m) {
           const antes = t.slice(Math.max(0, m.index - 14), m.index);
