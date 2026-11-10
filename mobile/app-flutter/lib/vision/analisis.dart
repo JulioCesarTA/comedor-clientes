@@ -340,10 +340,54 @@ Referencia crearReferencia(Uint8List rgba, Float32List mapa) {
   return Referencia(comida: comida, fondo: fondo, fRef: _suma(comida1) / zonas, advertencia: advertencia, mascara: comida1);
 }
 
+/// Misma regla que el servidor: una zona es comida si se aleja del color de la bandeja al menos la mitad
+/// de lo que se aleja la comida típica (así salsa, migas y grasa donde ya se comió no cuentan).
+const factorUmbralColor = 0.5;
+
+/// Color (RGB 0-1) de la bandeja: promedio del color de los prototipos de fondo (últimas 3 componentes).
+List<double> colorBandeja(List<List<double>> fondo) {
+  final c = [0.0, 0.0, 0.0];
+  for (final p in fondo) {
+    for (var i = 0; i < 3; i++) {
+      c[i] += p[dim - 3 + i] / pesoColor / fondo.length;
+    }
+  }
+  return c;
+}
+
+double _distColor(List<double> p, List<double> tray) {
+  var s = 0.0;
+  for (var i = 0; i < 3; i++) {
+    final t = p[dim - 3 + i] / pesoColor - tray[i];
+    s += t * t;
+  }
+  return math.sqrt(s);
+}
+
+/// Distancia de color mínima para no ser bandeja: la mitad de la mediana de la distancia de la comida típica.
+double umbralColor(List<List<double>> comida, List<List<double>> fondo) {
+  final tray = colorBandeja(fondo);
+  final dists = [for (final p in comida) _distColor(p, tray)]..sort();
+  final n = dists.length;
+  final mediana = n.isOdd ? dists[n ~/ 2] : (dists[n ~/ 2 - 1] + dists[n ~/ 2]) / 2;
+  return factorUmbralColor * mediana;
+}
+
 /// Foto de una bandeja + referencia -> % que quedó y % que se comió.
 ResultadoBandeja analizarBandeja(Uint8List rgba, Float32List mapa, Referencia ref) {
   final d = descriptores(rgba, mapa).d;
   final cl = clasificar(d, ref.comida, ref.fondo);
+  final tray = colorBandeja(ref.fondo), umbral = umbralColor(ref.comida, ref.fondo);
+  for (var z = 0; z < zonas; z++) {
+    if (cl.mascara[z] == 1) {
+      var s = 0.0;
+      for (var i = 0; i < 3; i++) {
+        final t = d[z * dim + dim - 3 + i] / pesoColor - tray[i];
+        s += t * t;
+      }
+      if (math.sqrt(s) <= umbral) cl.mascara[z] = 0;   // color de bandeja: no es comida
+    }
+  }
   final alisada = alisar(cl.mascara);
   final restante = ref.fRef > 0 ? math.min(100.0, 100.0 * (_suma(alisada) / zonas) / ref.fRef) : 0.0;
   final r1 = (restante * 10).round() / 10;

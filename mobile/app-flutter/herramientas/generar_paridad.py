@@ -1,10 +1,11 @@
 """Genera los datos con los que se comprueba que el teléfono (Dart + TFLite) calcula lo mismo que el servidor (Python + Keras).
 
 Crea dos fotos sintéticas (porción completa y bandeja con la mitad comida), corre el método REAL del servidor
-(ia-ml-service/app/services/analitica/vision.py) y guarda: los píxeles, el mapa que produce el modelo .tflite y los
-resultados esperados. La prueba test/paridad_test.dart repite el cálculo en Dart y compara.
+(ia-ml-service/app/domain/analitica/vision.py + adaptador TensorFlow) y guarda: los píxeles, el mapa que produce el
+modelo .tflite y los resultados esperados. La prueba test/paridad_test.dart repite el cálculo en Dart y compara.
 
 Uso: python herramientas/generar_paridad.py        (necesita TensorFlow, scikit-learn, Pillow)
+     IA_ML_DIR=/app python generar_paridad.py       (dentro del contenedor de ia-ml, que ya tiene TensorFlow)
 """
 import base64
 import json
@@ -17,9 +18,12 @@ import tensorflow as tf
 from PIL import Image, ImageDraw
 
 AQUI = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.abspath(os.path.join(AQUI, "..", "..", "..", "..", "ia-ml-service")))
+sys.path.insert(0, os.environ.get("IA_ML_DIR", os.path.abspath(os.path.join(AQUI, "..", "..", "..", "..", "ia-ml-service"))))
 os.environ.setdefault("AGENTES_DATA_DIR", os.path.join(os.environ.get("TEMP", "/tmp"), "paridad-datos"))
-from app.services.analitica import vision  # noqa: E402  (el servidor de verdad)
+from app.domain.analitica import vision  # noqa: E402  (las reglas del servidor de verdad)
+from app.infrastructure.adapters.outbound.tensorflow.procesador_imagenes import ProcesadorTensorFlow  # noqa: E402
+
+cnn = ProcesadorTensorFlow()
 
 MODELO = os.path.join(AQUI, "..", "assets", "modelos", "bandeja_mobilenetv2_b3.tflite")
 SALIDA = os.path.join(AQUI, "..", "test", "datos", "paridad.json")
@@ -69,21 +73,15 @@ ref_img, bandeja_img = bandeja(COMPLETA), bandeja(MITAD)
 ref224, ref_px = preparar(ref_img)
 ban224, ban_px = preparar(bandeja_img)
 
-# ---- método del servidor (Keras), paso a paso igual que registrar_referencia() y analizar_bandeja()
-d_ref, aspecto_ref = vision._zonas(ref_img)
-umbral, claridad = vision._otsu(aspecto_ref)
-comida = vision._alisar(aspecto_ref > umbral)
-p_comida, p_fondo = vision._prototipos(d_ref[comida], 4), vision._prototipos(d_ref[~comida], 4)
-comida, _ = vision._clasificar(d_ref, p_comida, p_fondo)
-comida = vision._alisar(comida)
-f_ref = float(comida.mean())
-d_ban, _ = vision._zonas(bandeja_img)
-es_comida, confianza = vision._clasificar(d_ban, p_comida, p_fondo)
-es_comida = vision._alisar(es_comida)
-restante = float(min(100.0, 100.0 * es_comida.mean() / f_ref))
-d_sin_comida, _ = vision._zonas(bandeja({}))
-sc, _ = vision._clasificar(d_sin_comida, p_comida, p_fondo)
-restante_vacia = float(min(100.0, 100.0 * vision._alisar(sc).mean() / f_ref))
+# ---- método del servidor: exactamente las funciones que usan registrar_referencia() y analizar_bandeja()
+d_ref, aspecto_ref = cnn.zonas(ref_img)
+_, claridad = vision.otsu(aspecto_ref)
+ref = vision.analizar_referencia(d_ref, aspecto_ref)
+comida, p_comida, p_fondo, f_ref = ref["comida"], ref["p_comida"], ref["p_fondo"], ref["f_ref"]
+d_ban, _ = cnn.zonas(bandeja_img)
+_, restante, confianza = vision.analizar_bandeja(d_ban, p_comida, p_fondo, f_ref)
+d_sin_comida, _ = cnn.zonas(bandeja({}))
+_, restante_vacia, _ = vision.analizar_bandeja(d_sin_comida, p_comida, p_fondo, f_ref)
 
 m_ref, m_ban = mapa_tflite(ref224), mapa_tflite(ban224)
 muestra = [0, 777, 1500, 2222, 3135]
