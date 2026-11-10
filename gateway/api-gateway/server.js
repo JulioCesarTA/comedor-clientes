@@ -167,9 +167,11 @@ const proxyAll = (patterns, target, onProxyReq) => createProxyMiddleware({
 
 /** Cabeceras con quién es y qué rol tiene, según el token verificado (el cliente no puede fijarlas). */
 const conUsuarioYRoles = (proxyReq, req) => {
+  console.log('[DEBUG conUsuarioYRoles]', req.method, req.originalUrl, 'user?', !!req.user, 'roles', req.user?.realm_access?.roles);
   if (!req.user) return;
   proxyReq.setHeader('x-roles', (req.user.realm_access?.roles || []).join(','));
   proxyReq.setHeader('x-usuario', req.user.preferred_username || '');
+  console.log('[DEBUG conUsuarioYRoles] header puesto:', proxyReq.getHeader('x-roles'));
 };
 
 // Núcleo del negocio del back-office (SPEC §4): /graphql va al gateway federado, con el mismo control de token.
