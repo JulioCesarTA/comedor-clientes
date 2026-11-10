@@ -110,12 +110,10 @@ class _AsistenciaPantallaState extends State<AsistenciaPantalla> {
       });
       await _refrescar();
       if (!mounted) return;
-      final dentro = r['dentro'] == true;
+      // Fuera del radio el servidor NO la registra y responde con el motivo (cae en el catch de abajo)
       final precision = p.accuracy.round();
-      setState(() => _aviso = dentro
-          ? '${tipo == 'entrada' ? 'Entrada' : 'Salida'} registrada a ${r['distanciaM']} m del comedor '
-              '(GPS con ±$precision m de precisión).'
-          : 'Quedó registrada, pero a ${r['distanciaM']} m del comedor: el administrador la verá marcada para revisar.');
+      setState(() => _aviso = '${tipo == 'entrada' ? 'Entrada' : 'Salida'} registrada a ${r['distanciaM']} m del comedor '
+          '(GPS con ±$precision m de precisión).');
     } on ErrorApi catch (e) {
       if (mounted) setState(() => _error = e.sinRed ? 'Sin conexión: para marcar necesitas red.' : e.mensaje);
     } finally {
@@ -183,7 +181,8 @@ class _AsistenciaPantallaState extends State<AsistenciaPantalla> {
         Tarjeta(titulo: 'Cómo se registra', hijos: [
           Text(
             'Al tocar el botón se toma tu ubicación una sola vez y se envía con la marca. '
-            'El servidor calcula la distancia al comedor${_lugar != null ? ' y acepta hasta ${_lugar!['radioM']} m' : ''}. '
+            'El servidor calcula la distancia al comedor${_lugar != null ? ' y solo la registra si estás dentro de ${_lugar!['radioM']} m' : ''}; '
+            'fuera de ese radio la marca no se guarda. '
             'La app no te sigue ni usa la ubicación en segundo plano.',
             style: const TextStyle(color: C.suave, fontSize: 12.5, height: 1.5),
           ),

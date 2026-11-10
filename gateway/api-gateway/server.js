@@ -164,6 +164,17 @@ const proxyAll = (patterns, target) => createProxyMiddleware({
 // Núcleo del negocio del back-office (SPEC §4): /graphql va al gateway federado, con el mismo control de token.
 app.use(requireAuth, proxyAll(['/graphql'], GRAPHQL_URL));
 app.use(requireAuth, proxyAll(['/menus/**', '/insumos/**'], MENU_URL));
+// Asistencia: quién es y qué rol tiene salen del token (solo el administrador cambia la ubicación del comedor).
+app.use('/asistencia', requireAuth, (req, res, next) => {
+  if (req.user) {
+    req.headers['x-roles'] = (req.user.realm_access?.roles || []).join(',');
+    req.headers['x-usuario'] = req.user.preferred_username || '';
+  } else {
+    delete req.headers['x-roles'];
+    delete req.headers['x-usuario'];
+  }
+  next();
+});
 app.use(requireAuth, proxyAll(['/reservas/**', '/estudiantes/**', '/ingreso/**', '/asistencia/**'], COMENSALES_URL));
 app.use(requireAuth, proxyAll(['/pagos/**', '/facturas/**'], PAGOS_URL));
 // El rol sale del token (no del cliente): el servicio de IA lo usa para decidir qué datos entrega a los reportes.
