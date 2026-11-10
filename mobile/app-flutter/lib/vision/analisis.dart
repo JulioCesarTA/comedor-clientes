@@ -11,6 +11,8 @@
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'sectores.dart';
+
 const rej = 56;                 // zonas por lado
 const lado = 224;               // lado de la foto que entra a la red
 const canal = 144;              // características por zona (capa block_3_expand_relu)
@@ -28,20 +30,28 @@ class ErrorVision implements Exception {
 
 /// Referencia: los «aspectos» típicos de comida y de plato, y qué fracción de la foto era comida.
 class Referencia {
-  Referencia({required this.comida, required this.fondo, required this.fRef, this.advertencia, this.mascara});
+  Referencia({required this.comida, required this.fondo, required this.fRef, this.advertencia, this.mascara,
+    this.zonasSectores, this.nombresSectores});
   final List<List<double>> comida;
   final List<List<double>> fondo;
   final double fRef;
   final String? advertencia;
   final Uint8List? mascara;
+  final Map<String, int>? zonasSectores;      // sector -> zonas que ocupa en la foto llena (null sin modelo de sectores)
+  final Map<String, String>? nombresSectores; // sector -> cómo se llama en este plato («pollo», «naranja»…)
+
+  Map<String, dynamic>? sectoresJson() =>
+      zonasSectores == null ? null : {'zonas': zonasSectores, 'nombres': nombresSectores ?? nombresPorDefecto};
 }
 
 class ResultadoBandeja {
-  ResultadoBandeja({required this.restante, required this.comido, required this.confianza, required this.mascara});
-  final double restante;
+  ResultadoBandeja({required this.restante, required this.comido, required this.confianza, required this.mascara,
+    this.sectores = const []});
+  final double restante;        // con sectores: el promedio de los sectores
   final double comido;
   final double confianza;
   final Uint8List mascara;
+  final List<Sector> sectores;
 }
 
 /// rgba (224*224*4) -> entrada de la red: Float32List(224*224*3) en [-1, 1], como MobileNetV2.
@@ -56,9 +66,11 @@ Float32List entradaRed(Uint8List rgba) {
 }
 
 class Descriptores {
-  Descriptores(this.d, this.aspecto);
+  Descriptores(this.d, this.aspecto, this.sat, this.tex);
   final Float32List d;          // zonas x dim
   final Float64List aspecto;    // «cara de comida» de cada zona
+  final Float64List sat;        // saturación media cruda de cada zona (entrada de la red de sectores)
+  final Float64List tex;        // textura cruda (desvío del gris) de cada zona
 }
 
 /// Descriptor de cada zona y su «aspecto de comida» (saturación + textura normalizadas).
@@ -112,7 +124,7 @@ Descriptores descriptores(Uint8List rgba, Float32List mapa) {
   for (var z = 0; z < zonas; z++) {
     aspecto[z] = sat[z] / (ms + 1e-8) + tex[z] / (mt + 1e-8);
   }
-  return Descriptores(d, aspecto);
+  return Descriptores(d, aspecto, sat, tex);
 }
 
 double _mediana(Float64List v) {
@@ -314,7 +326,7 @@ int _suma(Uint8List m) {
 }
 
 /// Foto de la porción completa -> prototipos de comida y de fondo + fracción de la foto que es comida.
-Referencia crearReferencia(Uint8List rgba, Float32List mapa) {
+Referencia crearReferencia(Uint8List rgba, Float32List mapa, {ModeloSectores? modelo, Map<String, String>? nombres}) {
   final r = descriptores(rgba, mapa);
   final (umbral, claridad) = otsu(r.aspecto);
   final cruda = Uint8List(zonas);
@@ -335,9 +347,14 @@ Referencia crearReferencia(Uint8List rgba, Float32List mapa) {
   }
   final a = _tomar(r.d, comida0, 1), b = _tomar(r.d, comida0, 0);
   final comida = prototipos(a.x, a.n, 4, 1), fondo = prototipos(b.x, b.n, 4, 2);
-  final cl = clasificar(r.d, comida, fondo);          // misma regla que se usará con las bandejas
-  final comida1 = alisar(cl.mascara);
-  return Referencia(comida: comida, fondo: fondo, fRef: _suma(comida1) / zonas, advertencia: advertencia, mascara: comida1);
+  final comida1 = mascaraComida(r.d, comida, fondo).mascara;   // misma regla que se usará con las bandejas
+  if (modelo == null) {
+    return Referencia(comida: comida, fondo: fondo, fRef: _suma(comida1) / zonas, advertencia: advertencia, mascara: comida1);
+  }
+  final clases = clasificarZonas(entradaSectores(r), modelo);   // arroz, ensalada, … de cada zona
+  final mascara = Uint8List.fromList([for (final c in clases) c > 0 ? 1 : 0]);
+  return Referencia(comida: comida, fondo: fondo, fRef: _suma(comida1) / zonas, advertencia: advertencia, mascara: mascara,
+      zonasSectores: sectoresReferencia(clases), nombresSectores: {...nombresPorDefecto, ...?nombres});
 }
 
 /// Misma regla que el servidor: una zona es comida si se aleja del color de la bandeja al menos la mitad
@@ -373,11 +390,11 @@ double umbralColor(List<List<double>> comida, List<List<double>> fondo) {
   return factorUmbralColor * mediana;
 }
 
-/// Foto de una bandeja + referencia -> % que quedó y % que se comió.
-ResultadoBandeja analizarBandeja(Uint8List rgba, Float32List mapa, Referencia ref) {
-  final d = descriptores(rgba, mapa).d;
-  final cl = clasificar(d, ref.comida, ref.fondo);
-  final tray = colorBandeja(ref.fondo), umbral = umbralColor(ref.comida, ref.fondo);
+/// Zona = comida si su prototipo más parecido es de comida Y su color se aleja del de la bandeja.
+/// Se usa igual en la referencia y en las bandejas (la foto llena contra sí misma da 100 %).
+({Uint8List mascara, double confianza}) mascaraComida(Float32List d, List<List<double>> comida, List<List<double>> fondo) {
+  final cl = clasificar(d, comida, fondo);
+  final tray = colorBandeja(fondo), umbral = umbralColor(comida, fondo);
   for (var z = 0; z < zonas; z++) {
     if (cl.mascara[z] == 1) {
       var s = 0.0;
@@ -388,13 +405,31 @@ ResultadoBandeja analizarBandeja(Uint8List rgba, Float32List mapa, Referencia re
       if (math.sqrt(s) <= umbral) cl.mascara[z] = 0;   // color de bandeja: no es comida
     }
   }
-  final alisada = alisar(cl.mascara);
-  final restante = ref.fRef > 0 ? math.min(100.0, 100.0 * (_suma(alisada) / zonas) / ref.fRef) : 0.0;
+  return (mascara: alisar(cl.mascara), confianza: cl.confianza);
+}
+
+/// Foto de una bandeja + referencia -> % que quedó y % que se comió.
+ResultadoBandeja analizarBandeja(Uint8List rgba, Float32List mapa, Referencia ref, {ModeloSectores? modelo}) {
+  final desc = descriptores(rgba, mapa);
+  final d = desc.d;
+  final cl = mascaraComida(d, ref.comida, ref.fondo);
+  var alisada = cl.mascara;
+  var restante = ref.fRef > 0 ? math.min(100.0, 100.0 * (_suma(alisada) / zonas) / ref.fRef) : 0.0;
+  var sectores = const <Sector>[];
+  final zonasRef = ref.zonasSectores;
+  if (modelo != null && zonasRef != null && zonasRef.isNotEmpty) {   // con sectores: % de cada uno y el promedio
+    final clases = clasificarZonas(entradaSectores(desc), modelo);
+    final (s, promedio) = comparar(zonasRef, clases, ref.nombresSectores ?? nombresPorDefecto);
+    sectores = s;
+    restante = promedio;
+    alisada = Uint8List.fromList([for (final c in clases) c > 0 ? 1 : 0]);
+  }
   final r1 = (restante * 10).round() / 10;
   return ResultadoBandeja(
     restante: r1,
     comido: ((100 - restante) * 10).round() / 10,
     confianza: (cl.confianza * 100).round() / 100,
     mascara: alisada,
+    sectores: sectores,
   );
 }

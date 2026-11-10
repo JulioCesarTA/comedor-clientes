@@ -1,5 +1,6 @@
 // La red convolucional DENTRO del teléfono: TensorFlow Lite (MobileNetV2 recortado en block_3_expand_relu).
 // El archivo .tflite (80 KB) viaja dentro de la app, por eso el análisis funciona sin internet.
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/services.dart' show rootBundle;
@@ -7,6 +8,7 @@ import 'package:image/image.dart' as img;
 import 'package:tflite_flutter/tflite_flutter.dart';
 
 import 'analisis.dart';
+import 'sectores.dart';
 
 const _modelo = 'assets/modelos/bandeja_mobilenetv2_b3.tflite';
 
@@ -15,6 +17,20 @@ Interpreter? _interprete;
 Future<Interpreter> cargarModelo() async {
   _interprete ??= await Interpreter.fromAsset(_modelo, options: InterpreterOptions()..threads = 2);
   return _interprete!;
+}
+
+const _sectores = 'assets/modelos/modelo_sectores.json';
+ModeloSectores? _modeloSectores;
+
+/// La red que reconoce cada sector (arroz, ensalada, …). null si la app no la trae: entonces solo hay % total.
+Future<ModeloSectores?> cargarModeloSectores() async {
+  if (_modeloSectores != null) return _modeloSectores;
+  try {
+    _modeloSectores = ModeloSectores.deJson(jsonDecode(await rootBundle.loadString(_sectores)) as Map<String, dynamic>);
+  } catch (_) {
+    return null;
+  }
+  return _modeloSectores;
 }
 
 Future<bool> modeloDisponible() async {

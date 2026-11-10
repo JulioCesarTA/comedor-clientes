@@ -8,6 +8,8 @@ import 'dart:math';
 import 'package:path_provider/path_provider.dart';
 
 import '../datos/api.dart';
+import 'analisis.dart';
+import 'sectores.dart';
 
 String nuevoId() {
   final r = Random.secure();
@@ -18,7 +20,7 @@ String nuevoId() {
 class RefLocal {
   RefLocal({required this.clienteId, required this.platoId, required this.fecha, required this.turno,
     required this.fRef, required this.comida, required this.fondo, this.advertencia, this.fotoRuta,
-    this.fotoKey, this.idServidor, this.rechazada = false, this.error, String? creado})
+    this.fotoKey, this.idServidor, this.rechazada = false, this.error, this.sectores, String? creado})
       : creado = creado ?? DateTime.now().toIso8601String();
 
   final String clienteId;
@@ -29,6 +31,7 @@ class RefLocal {
   final List<List<double>> comida;
   final List<List<double>> fondo;
   final String? advertencia;
+  final Map<String, dynamic>? sectores;   // {"zonas": {sector: n}, "nombres": {sector: nombre}}
   String? fotoRuta;
   String? fotoKey;
   String? idServidor;
@@ -42,6 +45,7 @@ class RefLocal {
         'clienteId': clienteId, 'platoId': platoId, 'fecha': fecha, 'turno': turno, 'fRef': fRef,
         'comida': comida, 'fondo': fondo, 'advertencia': advertencia, 'fotoRuta': fotoRuta,
         'fotoKey': fotoKey, 'idServidor': idServidor, 'rechazada': rechazada, 'error': error, 'creado': creado,
+        'sectores': sectores,
       };
 
   static RefLocal deJson(Map<String, dynamic> j) => RefLocal(
@@ -51,13 +55,15 @@ class RefLocal {
         fondo: (j['fondo'] as List).map((f) => (f as List).map((x) => (x as num).toDouble()).toList()).toList(),
         advertencia: j['advertencia'], fotoRuta: j['fotoRuta'], fotoKey: j['fotoKey'],
         idServidor: j['idServidor'], rechazada: j['rechazada'] ?? false, error: j['error'], creado: j['creado'],
+        sectores: j['sectores'] == null ? null : Map<String, dynamic>.from(j['sectores']),
       );
 }
 
 class BandejaLocal {
   BandejaLocal({required this.clienteId, required this.refId, required this.refEsLocal, required this.platoId,
     required this.fecha, required this.turno, required this.restante, required this.comido, required this.confianza,
-    this.fotoRuta, this.fotoKey, this.enviada = false, this.idServidor, this.rechazada = false, this.error, String? creado})
+    this.fotoRuta, this.fotoKey, this.enviada = false, this.idServidor, this.rechazada = false, this.error,
+    this.sectores = const [], String? creado})
       : creado = creado ?? DateTime.now().toIso8601String();
 
   final String clienteId;
@@ -69,6 +75,7 @@ class BandejaLocal {
   final double restante;
   final double comido;
   final double confianza;
+  final List<Sector> sectores;
   String? fotoRuta;
   String? fotoKey;
   bool enviada;
@@ -83,6 +90,7 @@ class BandejaLocal {
         'clienteId': clienteId, 'refId': refId, 'refEsLocal': refEsLocal, 'platoId': platoId, 'fecha': fecha,
         'turno': turno, 'restante': restante, 'comido': comido, 'confianza': confianza, 'fotoRuta': fotoRuta,
         'fotoKey': fotoKey, 'enviada': enviada, 'idServidor': idServidor, 'rechazada': rechazada, 'error': error, 'creado': creado,
+        'sectores': sectores.map((s) => s.aJson()).toList(),
       };
 
   static BandejaLocal deJson(Map<String, dynamic> j) => BandejaLocal(
@@ -91,13 +99,14 @@ class BandejaLocal {
         comido: (j['comido'] as num).toDouble(), confianza: (j['confianza'] as num).toDouble(),
         fotoRuta: j['fotoRuta'], fotoKey: j['fotoKey'], enviada: j['enviada'] ?? false, idServidor: j['idServidor'],
         rechazada: j['rechazada'] ?? false, error: j['error'], creado: j['creado'],
+        sectores: ((j['sectores'] as List?) ?? []).map((s) => Sector.deJson(Map<String, dynamic>.from(s))).toList(),
       );
 }
 
 /// Una referencia que se puede usar para analizar: del servidor o hecha en este teléfono.
 class RefUsable {
   RefUsable({required this.id, required this.platoId, required this.fecha, required this.turno, required this.fRef,
-    required this.comida, required this.fondo, required this.local, required this.sincronizada});
+    required this.comida, required this.fondo, required this.local, required this.sincronizada, this.sectores});
   final String id;
   final String platoId;
   final String fecha;
@@ -107,6 +116,15 @@ class RefUsable {
   final List<List<double>> fondo;
   final bool local;
   final bool sincronizada;
+  final Map<String, dynamic>? sectores;
+
+  /// La referencia lista para analizar (con sus sectores si los tiene).
+  Referencia comoReferencia() {
+    final z = sectores?['zonas'] as Map?, n = sectores?['nombres'] as Map?;
+    return Referencia(comida: comida, fondo: fondo, fRef: fRef,
+        zonasSectores: z?.map((k, v) => MapEntry('$k', (v as num).toInt())),
+        nombresSectores: n?.map((k, v) => MapEntry('$k', '$v')));
+  }
 }
 
 class ResumenSync {
@@ -137,12 +155,13 @@ class EstadoVision {
           comida: (r['comida'] as List).map((f) => (f as List).map((x) => (x as num).toDouble()).toList()).toList(),
           fondo: (r['fondo'] as List).map((f) => (f as List).map((x) => (x as num).toDouble()).toList()).toList(),
           local: false, sincronizada: true,
+          sectores: r['sectores'] == null ? null : Map<String, dynamic>.from(r['sectores']),
         )).toList();
     final ids = delServidor.map((r) => r.id).toSet();
     final mias = locales
         .where((r) => !(r.idServidor != null && ids.contains(r.idServidor)) && !r.rechazada)
         .map((r) => RefUsable(id: r.clienteId, platoId: r.platoId, fecha: r.fecha, turno: r.turno, fRef: r.fRef,
-            comida: r.comida, fondo: r.fondo, local: true, sincronizada: r.idServidor != null))
+            comida: r.comida, fondo: r.fondo, local: true, sincronizada: r.idServidor != null, sectores: r.sectores))
         .toList();
     final todas = [...mias, ...delServidor];
     todas.sort((a, b) => b.fecha.compareTo(a.fecha));
@@ -239,6 +258,7 @@ Future<ResumenSync> sincronizar(EstadoVision est, Api api) async {
         final out = await api.enviarReferencia({
           'cliente_id': r.clienteId, 'plato_id': r.platoId, 'fecha': r.fecha, 'turno': r.turno,
           'f_ref': r.fRef, 'comida': r.comida, 'fondo': r.fondo, 'foto_key': r.fotoKey, 'advertencia': r.advertencia,
+          'sectores': r.sectores,
         });
         r.idServidor = out['id'];
         res.referencias++;
@@ -273,6 +293,7 @@ Future<ResumenSync> sincronizar(EstadoVision est, Api api) async {
       try {
         final out = await api.enviarBandeja({
           'cliente_id': b.clienteId, 'ref_id': refId, 'restante': b.restante, 'confianza': b.confianza, 'foto_key': b.fotoKey,
+          if (b.sectores.isNotEmpty) 'sectores': b.sectores.map((s) => s.aJson()).toList(),
         });
         b.enviada = true;
         b.idServidor = out['id'];

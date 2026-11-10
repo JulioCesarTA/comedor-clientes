@@ -132,14 +132,16 @@ class _DesperdicioState extends State<Desperdicio> {
       final bytes = await x.readAsBytes();
       final prep = prepararFoto(bytes);
       final mapa = await caracteristicas(prep.rgba);           // TensorFlow Lite, sin internet
+      final sectores = await cargarModeloSectores();            // red de sectores (arroz, ensalada, …), también local
       final id = nuevoId();
       final foto = await guardarFoto(prep.jpegGrande, id);
 
       if (modo == 'ref') {
-        final r = crearReferencia(prep.rgba, mapa);
+        final r = crearReferencia(prep.rgba, mapa, modelo: sectores);
         est.locales.insert(0, RefLocal(
           clienteId: id, platoId: _idPlato(_plato.text), fecha: _fecha, turno: _turno,
           fRef: r.fRef, comida: r.comida, fondo: r.fondo, advertencia: r.advertencia, fotoRuta: foto.path,
+          sectores: r.sectoresJson(),
         ));
         await _guardar();
         setState(() {
@@ -148,11 +150,11 @@ class _DesperdicioState extends State<Desperdicio> {
           _aviso = 'Referencia guardada: ${_nombrePlato(_plato.text)}. ${r.advertencia ?? 'Ya puedes analizar bandejas, también sin internet.'}';
         });
       } else {
-        final r = analizarBandeja(prep.rgba, mapa, Referencia(comida: ref!.comida, fondo: ref.fondo, fRef: ref.fRef));
+        final r = analizarBandeja(prep.rgba, mapa, ref!.comoReferencia(), modelo: sectores);
         est.bandejas.insert(0, BandejaLocal(
           clienteId: id, refId: ref.id, refEsLocal: ref.local && !ref.sincronizada, platoId: ref.platoId,
           fecha: ref.fecha, turno: ref.turno, restante: r.restante, comido: r.comido, confianza: r.confianza,
-          fotoRuta: foto.path,
+          fotoRuta: foto.path, sectores: r.sectores,
         ));
         await _guardar();
         setState(() { _resultado = r; _fotoResultado = foto.path; _platoResultado = ref.platoId; });
@@ -291,18 +293,35 @@ class _DesperdicioState extends State<Desperdicio> {
                     Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       Text('${_resultado!.restante}%',
                           style: TextStyle(color: _color(_resultado!.restante), fontSize: 34, fontWeight: FontWeight.w800)),
-                      const Text('de la comida quedó en la bandeja', style: TextStyle(color: C.suave, fontSize: 12)),
+                      Text(_resultado!.sectores.isEmpty ? 'de la comida quedó en la bandeja' : 'quedó en promedio (de todos los sectores)',
+                          style: const TextStyle(color: C.suave, fontSize: 12)),
                       Text('Se comió el ${_resultado!.comido}%', style: const TextStyle(color: C.texto, fontSize: 13)),
                     ])),
                   ]),
                   const SizedBox(height: 12),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(4),
-                    child: LinearProgressIndicator(
-                      value: (_resultado!.restante / 100).clamp(0, 1), minHeight: 8,
-                      backgroundColor: C.tarjeta2, color: _color(_resultado!.restante),
+                  for (final s in _resultado!.sectores)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: Row(children: [
+                        SizedBox(width: 92, child: Text(s.nombre[0].toUpperCase() + s.nombre.substring(1),
+                            style: const TextStyle(color: C.texto, fontSize: 13), overflow: TextOverflow.ellipsis)),
+                        Expanded(child: ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: LinearProgressIndicator(value: (s.restante / 100).clamp(0, 1), minHeight: 7,
+                              backgroundColor: C.tarjeta2, color: _color(s.restante)),
+                        )),
+                        SizedBox(width: 48, child: Text('${s.restante.round()}%', textAlign: TextAlign.right,
+                            style: TextStyle(color: _color(s.restante), fontWeight: FontWeight.bold, fontSize: 13))),
+                      ]),
                     ),
-                  ),
+                  if (_resultado!.sectores.isEmpty)
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: LinearProgressIndicator(
+                        value: (_resultado!.restante / 100).clamp(0, 1), minHeight: 8,
+                        backgroundColor: C.tarjeta2, color: _color(_resultado!.restante),
+                      ),
+                    ),
                   Padding(padding: const EdgeInsets.only(top: 8),
                       child: Text('Confianza ${(_resultado!.confianza * 100).round()} % · calculado en este teléfono, sin internet.'
                           '${pend > 0 ? ' Se enviará cuando haya conexión.' : ' Ya está en el servidor.'}',
@@ -315,8 +334,13 @@ class _DesperdicioState extends State<Desperdicio> {
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 5),
                       child: Row(children: [
-                        Expanded(child: Text('${_nombrePlato(b.platoId)} · ${_hora(b.creado)}',
-                            style: const TextStyle(color: C.texto, fontSize: 13), overflow: TextOverflow.ellipsis)),
+                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text('${_nombrePlato(b.platoId)} · ${_hora(b.creado)}',
+                              style: const TextStyle(color: C.texto, fontSize: 13), overflow: TextOverflow.ellipsis),
+                          if (b.sectores.isNotEmpty)
+                            Text(b.sectores.map((s) => '${s.nombre} ${s.restante.round()}%').join(' · '),
+                                style: const TextStyle(color: C.tenue, fontSize: 11), overflow: TextOverflow.ellipsis),
+                        ])),
                         Text('${b.restante}%', style: TextStyle(color: _color(b.restante), fontWeight: FontWeight.bold)),
                         const SizedBox(width: 8),
                         Icon(b.enviada ? Icons.check : b.rechazada ? Icons.close : Icons.schedule,
