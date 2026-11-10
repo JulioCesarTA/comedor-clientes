@@ -61,6 +61,9 @@ function UbicacionComedor({ avisar }: { avisar: (m: string, k: 'ok' | 'err') => 
   }, []);
 
   const aqui = () => {
+    if (!window.isSecureContext) {         // los navegadores solo dan el GPS en https o localhost
+      avisar('El navegador solo da la ubicación en páginas https: copia las coordenadas de Google Maps y escríbelas.', 'err'); return;
+    }
     if (!navigator.geolocation) { avisar('Este navegador no da la ubicación.', 'err'); return; }
     setBuscando(true);
     navigator.geolocation.getCurrentPosition(
