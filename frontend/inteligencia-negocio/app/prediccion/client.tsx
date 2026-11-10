@@ -1,7 +1,7 @@
 'use client';
 import { useMemo, useState } from 'react';
 import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { Card, KPI } from '../components/Charts';
+import { Card } from '../components/Charts';
 import { API, fechaLocal, useVivo } from '../lib/vivo';
 import { BarraVivo } from '../components/BarraVivo';
 
@@ -64,13 +64,6 @@ export function PrediccionVivo() {
 
       {d.suficiente && (
         <>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <KPI label="Registros reales" value={d.muestras} delta={`${d.conDemanda} con reservas · plato × turno × día`} color="purple" />
-            <KPI label="Error medio (MAE)" value={`${m.mae} raciones`} delta={`Predecir el promedio erraría ${m.maeBase} · la mediana ${m.maeMediana}`} color="cyan" />
-            <KPI label="R²" value={m.r2 ?? '—'} delta={`Validación ${m.validacion}`} color="orange" />
-            <KPI label="Calidad" value={m.confiable ? 'Confiable' : 'Pocos datos'} delta={m.confiable ? `${m.mejoraVsBase}% menos error que el promedio` : 'Aún no supera al baseline (promedio/mediana)'} color={m.confiable ? 'emerald' : 'red'} />
-          </div>
-
           {!m.confiable && (
             <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-amber-200 text-sm leading-relaxed">
               <b>Todavía hay pocos datos para una predicción confiable:</b> solo {d.conDemanda} de {d.muestras} registros tienen reservas, y el modelo aún no mejora a

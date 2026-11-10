@@ -1,6 +1,6 @@
 'use client';
 import { Bar, BarChart, CartesianGrid, Cell, LabelList, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis, ZAxis } from 'recharts';
-import { Card, KPI } from '../components/Charts';
+import { Card } from '../components/Charts';
 import { useVivo } from '../lib/vivo';
 import { BarraVivo } from '../components/BarraVivo';
 
@@ -10,7 +10,6 @@ const ACCION: Record<string, string> = {
   'Ajustar': 'bg-amber-500/15 text-amber-400 border-amber-500/40',
   'Retirar o rediseñar': 'bg-red-500/15 text-red-400 border-red-500/40',
 };
-const VARIABLE: Record<string, string> = { aceptacion: 'Aceptación', demandaMedia: 'Demanda media', desperdicio: 'Desperdicio' };
 const corto = (id: string) => id.replace('plato-', '');
 const tip = { background: '#1e293b', border: '1px solid #334155', borderRadius: 8, fontSize: 12 };
 
@@ -37,13 +36,7 @@ export function AgrupacionVivo() {
         <BarraVivo hora={hora} sinConexion={sinConexion} recargar={recargar} registros={d.registros} minimo={d.minimoRegistros} />
         <span className="text-slate-500">Se vuelve a agrupar cuando cambian las reservas o llegan fotos de bandejas</span>
       </div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <KPI label="Platos agrupados" value={d.platos} delta={d.platosOmitidos ? `${d.platosOmitidos} con menos de ${d.minimoVeces} servicios quedan fuera` : `${d.registros.toLocaleString('es-BO')} veces servidos en total`} color="purple" />
-        <KPI label="Grupos (K-Means)" value={d.k} delta="Elegido por índice de silueta" color="cyan" />
-        <KPI label="Silueta" value={d.silueta ?? '—'} delta="Cuanto más cerca de 1, más separados" color="orange" />
-        <KPI label="Variables" value={d.variables.length} delta={d.variables.map((v: string) => VARIABLE[v] ?? v).join(' · ')} color="emerald" />
-      </div>
-      {d.nota && <div className="rounded-xl border border-slate-700 bg-slate-800/50 p-4 text-slate-300 text-sm">{d.nota} El costo por ración no está registrado en el sistema, por eso no se usa.</div>}
+      {d.nota &&<div className="rounded-xl border border-slate-700 bg-slate-800/50 p-4 text-slate-300 text-sm">{d.nota} El costo por ración no está registrado en el sistema, por eso no se usa.</div>}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <Card title="Mapa de platos" subtitle="Horizontal: % del cupo que se reserva · Vertical: raciones por vez que se sirve · Tamaño: veces servido" className="lg:col-span-2">

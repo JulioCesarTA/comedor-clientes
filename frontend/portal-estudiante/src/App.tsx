@@ -74,7 +74,6 @@ function UbicacionComedor({ avisar }: { avisar: (m: string, k: 'ok' | 'err') => 
   };
 
   const campo = 'w-full px-3 py-2 bg-slate-900 border border-slate-700 text-white rounded-lg text-sm font-mono focus:outline-none focus:border-cyan-500';
-  const cambiado = !!lugar && (String(lugar.lat) !== lat || String(lugar.lon) !== lon);
   return (
     <div className="mt-5 bg-slate-900/50 border border-slate-700 rounded-xl p-5">
       <h3 className="text-white font-semibold mb-1">Ubicación del comedor <span className="ml-2 text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-orange-500/20 text-orange-300">solo administrador</span></h3>
@@ -87,7 +86,7 @@ function UbicacionComedor({ avisar }: { avisar: (m: string, k: 'ok' | 'err') => 
         <label className="block"><span className="block text-[11px] text-slate-400 mb-1">Longitud</span>
           <input value={lon} onChange={e => setLon(e.target.value)} inputMode="decimal" placeholder="-63.15052" className={campo} /></label>
       </div>
-      <button onClick={guardar} disabled={guardando || !cambiado}
+      <button onClick={guardar} disabled={guardando}
         className="mt-4 px-5 py-2 rounded-lg text-sm font-semibold bg-gradient-to-r from-orange-500 to-amber-600 disabled:opacity-40 text-white">
         {guardando ? 'Guardando…' : 'Guardar'}
       </button>

@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import { Card, KPI } from '../components/Charts';
+import { Card } from '../components/Charts';
 import { API, fechaLocal, hhmmss, useVivo } from '../lib/vivo';
 
 const TURNO: Record<string, string> = { DESAYUNO: 'Desayuno', ALMUERZO: 'Almuerzo', CENA: 'Cena' };
@@ -88,7 +88,6 @@ export function DesperdicioVivo() {
   const enLista = refs.data ?? [];
   const todas = refNueva && !enLista.some((r: any) => r.id === refNueva.id)
     ? [{ id: refNueva.id, plato_id: refNueva.platoId, turno: refNueva.turno, fecha: refNueva.fecha }, ...enLista] : enLista;   // aparece al instante
-  const refActual = todas.find((r: any) => r.id === refSel);
 
   return (
     <div className="px-8 pb-8 space-y-6">
@@ -97,13 +96,6 @@ export function DesperdicioVivo() {
           ? <span className="px-2.5 py-1 rounded border bg-amber-500/10 border-amber-500/40 text-amber-400 font-medium">Sin conexión · últimos datos de las {hhmmss(res.hora)}</span>
           : <span className="px-2.5 py-1 rounded border bg-emerald-500/10 border-emerald-500/40 text-emerald-400 font-medium">En vivo · actualizado {hhmmss(res.hora)}</span>}
         <span className="px-2.5 py-1 rounded border bg-slate-800 border-slate-700 text-slate-300">{d?.modelo ?? 'Cargando red…'} · funciona sin internet</span>
-      </div>
-
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <KPI label="Fotos de referencia" value={d?.referencias ?? '—'} delta="Porciones completas registradas" color="purple" />
-        <KPI label="Bandejas analizadas" value={d?.bandejas ?? '—'} delta="Comparadas con su referencia" color="cyan" />
-        <KPI label="Sobrante medio" value={d?.restanteMedio != null ? d.restanteMedio + '%' : '—'} delta="De la porción de referencia" color="orange" />
-        <KPI label="Comido medio" value={d?.restanteMedio != null ? (100 - d.restanteMedio).toFixed(1) + '%' : '—'} delta="Lo que sí se aprovechó" color="emerald" />
       </div>
 
       {error && <div className="rounded-xl border border-red-500/40 bg-red-500/10 p-3 text-red-300 text-sm">{error}</div>}
@@ -148,7 +140,6 @@ export function DesperdicioVivo() {
             {!todas.length && <option value="">— sube primero una referencia —</option>}
             {todas.map((r: any) => <option key={r.id} value={r.id}>{corto(r.plato_id)} · {TURNO[r.turno]} · {r.fecha}</option>)}
           </select>
-          {refActual && <div className="mb-3"><Foto src={`${API}/ml/vision/foto/ref/${refActual.id}`} /></div>}
           <label className="block">
             <input type="file" accept="image/*" multiple className="hidden" onChange={e => e.target.files && subirBandejas(e.target.files)} />
             <span className="block w-full py-3 bg-gradient-to-r from-orange-500 to-red-500 text-white font-semibold rounded-lg text-center cursor-pointer hover:brightness-110">
