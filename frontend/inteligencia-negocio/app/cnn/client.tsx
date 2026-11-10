@@ -1,6 +1,5 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Card, KPI } from '../components/Charts';
 import { API, fechaLocal, hhmmss, useVivo } from '../lib/vivo';
 
@@ -176,22 +175,7 @@ export function DesperdicioVivo() {
         </Card>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <Card title="Sobrante promedio por plato" subtitle="Con todas las bandejas analizadas">
-          {!d?.porPlato?.length ? <div className="text-sm text-slate-500 py-8 text-center">Todavía no hay bandejas analizadas.</div> : (
-            <ResponsiveContainer width="100%" height={260}>
-              <BarChart data={d.porPlato.map((p: any) => ({ ...p, nombre: `${corto(p.platoId)} (${TURNO[p.turno]})` }))}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                <XAxis dataKey="nombre" stroke="#64748b" fontSize={10} />
-                <YAxis stroke="#64748b" fontSize={10} unit="%" domain={[0, 100]} />
-                <Tooltip contentStyle={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 8, fontSize: 12 }} />
-                <Bar dataKey="restante" name="Sobrante %" radius={[8, 8, 0, 0]}>
-                  {d.porPlato.map((p: any, i: number) => <Cell key={i} fill={colorRestante(p.restante)} />)}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          )}
-        </Card>
+      <div className="grid grid-cols-1 gap-6">
         <Card title="Últimas fotos analizadas" subtitle="Se actualizan en vivo · lo que quedó de cada sector y el promedio">
           {!d?.recientes?.length ? <div className="text-sm text-slate-500 py-8 text-center">Sin fotos todavía.</div> : (
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">

@@ -121,6 +121,7 @@ Future<List<int>> aPdf(Map<String, dynamic> res) async {
   final filas = _lista(res['filas']);
   final doc = pw.Document();
   doc.addPage(pw.MultiPage(
+    maxPages: 1000, // por defecto corta en 20 páginas y un reporte de un mes entero no entraba
     pageFormat: cols.length > 5 ? PdfPageFormat.a4.landscape : PdfPageFormat.a4,
     margin: const pw.EdgeInsets.all(28),
     build: (ctx) => [

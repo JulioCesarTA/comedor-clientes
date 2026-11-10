@@ -4,13 +4,11 @@
 // internet. El motor es el mismo que el del servidor y el del teléfono (la paridad se comprueba con un test).
 import { useEffect, useRef, useState } from 'react';
 import { Card } from '../components/Charts';
-import { aHtml, aXlsxBase64, dmyIso, fmtValor, nombreArchivo } from '../lib/reportes/exportar';
+import { aXlsxBase64, dmyIso, fmtValor, nombreArchivo } from '../lib/reportes/exportar';
 import { guardar, leerGuardado } from '../lib/reportes/datos';
-import { ayuda as ayudaLocal, consultar, ejecutarSpec, preparar } from '../lib/reportes/local';
+import { ayuda as ayudaLocal, consultar, preparar } from '../lib/reportes/local';
 import { crearDictado, vozDisponible, Dictado, SILENCIO_MS } from '../lib/reportes/voz';
 
-const FORMATOS: [string, string][] = [['pantalla', 'Pantalla'], ['pdf', 'PDF'], ['excel', 'Excel']];
-const POR: [string, string][] = [['dia', 'Día'], ['semana', 'Semana'], ['mes', 'Mes'], ['anio', 'Año']];
 const MAX_FILAS_TABLA = 300;
 
 type Columna = { key: string; label: string; tipo: string; fmt?: string };
@@ -43,17 +41,46 @@ async function exportar(res: Reporte, formato: string) {
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
     return descargar(new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), nombreArchivo(res.titulo, 'xlsx'));
   }
-  if (formato === 'pdf') {                       // se arma como HTML y se imprime: en el diálogo se elige «Guardar como PDF»
-    const f = document.createElement('iframe');
-    f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
-    document.body.appendChild(f);
-    f.srcdoc = aHtml(res);
-    f.onload = () => { f.contentWindow?.focus(); f.contentWindow?.print(); setTimeout(() => f.remove(), 60000); };
-  }
+  if (formato === 'pdf') return descargar(await aPdf(res), nombreArchivo(res.titulo, 'pdf'));
 }
 
+const celdaTexto = (v: any, c: Columna) => (v === null || v === undefined ? '-' : typeof v === 'number' ? fmtValor(v, c.fmt) : dmyIso(v));
+
+/** El PDF se arma aquí mismo (jsPDF, también sin internet) y se descarga como archivo: todas las filas, en varias páginas. */
+async function aPdf(res: Reporte): Promise<Blob> {
+  const { jsPDF } = await import('jspdf');
+  const autoTable = (await import('jspdf-autotable')).default;
+  const doc = new jsPDF({ orientation: res.columnas.length > 5 ? 'landscape' : 'portrait', unit: 'pt', format: 'a4' });
+  const ancho = doc.internal.pageSize.getWidth() - 80;
+  let y = 42;
+  const parrafo = (txt: string, tam: number, gris: number, alto: number) => {
+    doc.setFontSize(tam); doc.setTextColor(gris);
+    const lineas = doc.splitTextToSize(txt, ancho);
+    doc.text(lineas, 40, y);
+    y += alto * lineas.length;
+  };
+  doc.setFont('helvetica', 'bold'); parrafo(res.titulo, 15, 20, 18);
+  doc.setFont('helvetica', 'normal');
+  parrafo(`Comedor Universitario UAGRM · generado el ${res.generado}`, 9, 110, 12);
+  if (res.condiciones?.length) parrafo(`Condiciones: ${res.condiciones.join('; ')}`, 9, 110, 12);
+  y += 4;
+  for (const l of res.resumen) parrafo(`- ${l}`, 10, 40, 13);
+  const body = res.filas.map((f: any) => res.columnas.map(c => celdaTexto(f[c.key], c)));
+  if (res.totales) body.push(res.columnas.map((c, j) => (j === 0 ? 'TOTAL' : c.key in res.totales! ? celdaTexto(res.totales![c.key], c) : '')));
+  if (!body.length) body.push(res.columnas.map((_, j) => (j === 0 ? 'No hay datos que cumplan estas condiciones.' : '')));
+  autoTable(doc, {
+    startY: y + 6, head: [res.columnas.map(c => c.label)], body, margin: { left: 40, right: 40 },
+    styles: { fontSize: 8, cellPadding: 3 }, headStyles: { fillColor: [30, 41, 59] }, alternateRowStyles: { fillColor: [248, 250, 252] },
+    columnStyles: Object.fromEntries(res.columnas.map((c, i) => [i, { halign: c.tipo === 'numero' ? 'right' : 'left' }])),
+  });
+  return doc.output('blob');
+}
+
+// El archivo se descarga solo si ESTE pedido lo nombra ("en pdf", "pasalo a excel"); seguir la conversación no lo repite
+const PIDE_ARCHIVO = /\b(pdf|excel|xlsx|xls|planilla|hoja de c[aá]lculo)\b/i;
+
 function Tabla({ res }: { res: Reporte }) {
-  const celda = (v: any, c: Columna) => (v === null || v === undefined ? '—' : typeof v === 'number' ? fmtValor(v, c.fmt) : dmyIso(v));
+  const celda = celdaTexto;
   if (!res.filas.length) return <p className="text-slate-400 text-sm">No hay datos que cumplan estas condiciones.</p>;
   return (
     <div className="overflow-auto max-h-[28rem] rounded-lg border border-slate-800">
@@ -81,7 +108,6 @@ function Tabla({ res }: { res: Reporte }) {
 
 export function ReportesIA() {
   const [texto, setTexto] = useState('');
-  const [formato, setFormato] = useState('pantalla');
   const [res, setRes] = useState<Reporte | null>(null);
   const [error, setError] = useState('');
   const [aviso, setAviso] = useState('');
@@ -121,12 +147,12 @@ export function ReportesIA() {
 
   const bajar = async (r: Reporte, f: string) => {
     setAviso(`Generando ${f === 'excel' ? 'Excel' : f.toUpperCase()}…`);
-    try { await exportar(r, f); setAviso(f === 'pdf' ? 'Se abrió la impresión: elige «Guardar como PDF».' : 'Listo: Excel descargado.'); }
+    try { await exportar(r, f); setAviso(`Listo: ${f === 'pdf' ? 'PDF' : 'Excel'} descargado (${nombreArchivo(r.titulo, f === 'pdf' ? 'pdf' : 'xlsx')}).`); }
     catch (e: any) { setAviso(''); setError('No pude generar el archivo: ' + (e.message || e)); }
   };
 
   const enviando = useRef(false);
-  const generar = async (t?: string, opc: { continuar?: boolean; fmt?: string } = {}) => {
+  const generar = async (t?: string, opc: { continuar?: boolean } = {}) => {
     const q = (t === undefined ? texto : t).trim();
     if (!q || enviando.current) return;                 // no se manda dos veces mientras se calcula
     enviando.current = true;
@@ -135,20 +161,12 @@ export function ReportesIA() {
     try {
       const r = consultar(q, opc.continuar === false ? null : res?.spec) as Reporte;      // se calcula aquí, sin red
       setRes(r); guardar('ultimo', r); recordar(q);
-      const f = opc.fmt || (r.spec?.salida && r.spec.salida !== 'pantalla' ? r.spec.salida : formato);
-      setFormato(f);
-      if (f !== 'pantalla') bajar(r, f);
+      const salida = r.spec?.salida || 'pantalla';
+      if (salida !== 'pantalla' && PIDE_ARCHIVO.test(q)) await bajar(r, salida);
     } catch (e: any) { setError(e.message || String(e)); }
     finally { setCargando(false); enviando.current = false; }
   };
   generarRef.current = (t: string) => { generar(t); };
-
-  // Los ajustes rápidos reejecutan la misma consulta (también en este navegador) con el spec cambiado
-  const aplicar = (nuevo: any) => {
-    setError('');
-    try { const r = ejecutarSpec(nuevo) as Reporte; setRes({ ...r, entendi: res?.entendi || r.entendi }); guardar('ultimo', r); }
-    catch (e: any) { setError(e.message || String(e)); }
-  };
 
   const alternarMic = () => {
     setError('');
@@ -164,10 +182,6 @@ export function ReportesIA() {
     try { dictado.current?.iniciar(); setEscuchando(true); } catch { setEscuchando(false); }
   };
 
-  const spec = res?.spec;
-  const agrupado = !!(spec?.agrupar?.length);
-  const ds = ayuda.find(a => a.id === res?.dataset);
-  const colFecha = ds?.columnas.find(c => c.tipo === 'fecha')?.key;
   const ejemplos = ayuda.flatMap(a => a.ejemplos).slice(0, 7);
 
   return (
@@ -194,8 +208,8 @@ export function ReportesIA() {
         )}
         <div className="flex gap-3">
           <textarea value={texto} onChange={e => setTexto(e.target.value)} rows={3} readOnly={escuchando || cargando}
-            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!escuchando) generar(undefined, { fmt: formato }); } }}
-            placeholder="Ej.: quiero ver fecha, monto y estudiante de los pagos de noviembre, los mayores primero, en Excel"
+            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!escuchando) generar(); } }}
+            placeholder="Ej.: pagos de noviembre, los mayores primero, en pdf"
             className="flex-1 px-4 py-3 bg-slate-900 border border-slate-700 text-white rounded-lg focus:outline-none focus:border-orange-500 resize-none" />
           <button onClick={alternarMic} disabled={!hayVoz || cargando} title={hayVoz ? 'Dictar' : 'Este navegador no permite dictado: usa Chrome o Edge'}
             className={'w-24 rounded-lg border flex flex-col items-center justify-center text-white disabled:opacity-40 ' + (escuchando ? 'bg-red-500 border-red-500' : 'bg-slate-800 border-slate-700 hover:border-slate-500')}>
@@ -206,9 +220,8 @@ export function ReportesIA() {
         {!hayVoz && <p className="text-xs text-slate-500 mt-2">El dictado necesita Chrome o Edge. Mientras tanto, escribe tu pedido.</p>}
         {escuchando && <p className="text-xs text-red-300 mt-2">Habla tranquilo: se envía solo cuando te quedes callado {SILENCIO_MS / 1000} segundos. Toca ■ para parar sin enviar.</p>}
         <div className="flex flex-wrap items-center gap-2 mt-4">
-          <span className="text-xs text-slate-400 mr-1">Ver en</span>
-          {FORMATOS.map(([k, n]) => <Chip key={k} texto={n} activo={formato === k} onClick={() => setFormato(k)} />)}
-          <button onClick={() => generar(undefined, { fmt: formato })} disabled={cargando || escuchando || !texto.trim()}
+          <span className="text-xs text-slate-500">Di «en pdf» o «en excel» y el archivo se descarga solo.</span>
+          <button onClick={() => generar()} disabled={cargando || escuchando || !texto.trim()}
             className="ml-auto px-5 py-2 rounded-lg font-semibold text-white bg-gradient-to-r from-orange-500 to-amber-600 disabled:opacity-50">
             {cargando ? 'Calculando…' : 'Generar reporte'}
           </button>
@@ -225,36 +238,9 @@ export function ReportesIA() {
 
       {res && (
         <>
-          <Card title="Así lo entendí">
-            <p className="text-white text-sm mb-2">{res.entendi}</p>
-            {res.notas?.map((n, i) => <p key={i} className="text-amber-300 text-xs">• {n}</p>)}
-            <div className="flex flex-wrap gap-2 mt-3">
-              {(spec?.filtros || []).map((f: any, i: number) => (
-                <Chip key={i} onClick={() => aplicar({ ...spec, filtros: spec.filtros.filter((_: any, k: number) => k !== i) })}
-                  texto={`${f.col} ${f.op} ${Array.isArray(f.valor) ? f.valor.join('–') : String(f.valor)}  ✕`} />
-              ))}
-              {spec?.fecha && <Chip onClick={() => aplicar({ ...spec, fecha: null })} texto={`Período: ${spec.fecha.etiqueta}  ✕`} />}
-            </div>
-            <div className="text-xs text-slate-400 mt-3 mb-1">Agrupar</div>
-            <div className="flex flex-wrap gap-2">
-              <Chip texto="Sin agrupar" activo={!agrupado} onClick={() => aplicar({ ...spec, agrupar: [], medidas: [], columnas: null, orden: [] })} />
-              {colFecha && POR.map(([k, n]) => <Chip key={k} texto={n} activo={agrupado && spec.agrupar[0].por === k} onClick={() => aplicar({ ...spec, agrupar: [{ col: colFecha, por: k }], columnas: null, orden: [] })} />)}
-              {(ds?.columnas || []).filter(c => c.tipo === 'categoria').map(c => <Chip key={c.key} texto={c.label} activo={agrupado && spec.agrupar[0].col === c.key && !spec.agrupar[0].por} onClick={() => aplicar({ ...spec, agrupar: [{ col: c.key }], columnas: null, orden: [] })} />)}
-            </div>
-            <div className="text-xs text-slate-400 mt-3 mb-1">Cantidad</div>
-            <div className="flex flex-wrap gap-2">
-              {[5, 10, 20].map(n => <Chip key={n} texto={`Primeros ${n}`} activo={spec?.limite === n} onClick={() => aplicar({ ...spec, limite: n })} />)}
-              <Chip texto="Todos" activo={!spec?.limite} onClick={() => aplicar({ ...spec, limite: null })} />
-            </div>
-          </Card>
-
           <Card title={res.titulo} subtitle={`${res.datasetEtiqueta} · ${res.generado}`}>
             {res.resumen.map((l, i) => <p key={i} className="text-sm text-slate-300">{l}</p>)}
-            <div className="flex gap-2 my-4">
-              {[['pdf', 'PDF'], ['excel', 'Excel']].map(([k, n]) => (
-                <button key={k} onClick={() => bajar(res, k)} className="px-4 py-1.5 rounded-lg border border-slate-700 bg-slate-800 text-sm text-slate-100 hover:border-orange-500">⬇ {n}</button>
-              ))}
-            </div>
+            <div className="h-4" />
             <Tabla res={res} />
           </Card>
         </>

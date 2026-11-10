@@ -8,6 +8,8 @@
     "start": "next start -p 3003 -H 0.0.0.0"
   },
   "dependencies": {
+    "jspdf": "2.5.2",
+    "jspdf-autotable": "3.8.4",
     "next": "14.2.13",
     "react": "18.3.1",
     "react-dom": "18.3.1",
