@@ -93,7 +93,9 @@ export function DesperdicioVivo() {
   return (
     <div className="px-8 pb-8 space-y-6">
       <div className="flex flex-wrap items-center gap-3 text-xs">
-        <span className="px-2.5 py-1 rounded border bg-emerald-500/10 border-emerald-500/40 text-emerald-400 font-medium">En vivo · actualizado {hhmmss(res.hora)}</span>
+        {res.sinConexion
+          ? <span className="px-2.5 py-1 rounded border bg-amber-500/10 border-amber-500/40 text-amber-400 font-medium">Sin conexión · últimos datos de las {hhmmss(res.hora)}</span>
+          : <span className="px-2.5 py-1 rounded border bg-emerald-500/10 border-emerald-500/40 text-emerald-400 font-medium">En vivo · actualizado {hhmmss(res.hora)}</span>}
         <span className="px-2.5 py-1 rounded border bg-slate-800 border-slate-700 text-slate-300">{d?.modelo ?? 'Cargando red…'} · funciona sin internet</span>
       </div>
 
