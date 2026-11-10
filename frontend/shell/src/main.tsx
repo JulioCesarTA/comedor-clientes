@@ -330,14 +330,18 @@ function App() {
 
 createRoot(document.getElementById('root')!).render(<App />);
 
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(() => {});
-    navigator.serviceWorker.ready.then((r) => {
-      const urls = performance.getEntriesByType('resource')
-        .filter((e) => ['script', 'link', 'css', 'img'].includes((e as PerformanceResourceTiming).initiatorType))
-        .map((e) => e.name);
-      r.active?.postMessage({ tipo: 'guardar', urls });
-    });
+// Service worker (PWA: abre sin internet). Con Module Federation este código corre DESPUÉS del evento «load»,
+// así que esperar ese evento nunca registraba nada: si la página ya cargó, se registra en el acto.
+function registrarServiceWorker() {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+  navigator.serviceWorker.ready.then((r) => {
+    const urls = performance.getEntriesByType('resource')
+      .filter((e) => ['script', 'link', 'css', 'img'].includes((e as PerformanceResourceTiming).initiatorType))
+      .map((e) => e.name);
+    r.active?.postMessage({ tipo: 'guardar', urls });
   });
+}
+if ('serviceWorker' in navigator) {
+  if (document.readyState === 'complete') registrarServiceWorker();
+  else window.addEventListener('load', registrarServiceWorker);
 }
