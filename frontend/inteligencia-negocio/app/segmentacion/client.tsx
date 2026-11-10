@@ -38,7 +38,7 @@ export function AgrupacionVivo() {
         <span className="text-slate-500">Se vuelve a agrupar cuando cambian las reservas o llegan fotos de bandejas</span>
       </div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <KPI label="Platos agrupados" value={d.platos} delta={`${d.registros.toLocaleString('es-BO')} veces servidos en total`} color="purple" />
+        <KPI label="Platos agrupados" value={d.platos} delta={d.platosOmitidos ? `${d.platosOmitidos} con menos de ${d.minimoVeces} servicios quedan fuera` : `${d.registros.toLocaleString('es-BO')} veces servidos en total`} color="purple" />
         <KPI label="Grupos (K-Means)" value={d.k} delta="Elegido por índice de silueta" color="cyan" />
         <KPI label="Silueta" value={d.silueta ?? '—'} delta="Cuanto más cerca de 1, más separados" color="orange" />
         <KPI label="Variables" value={d.variables.length} delta={d.variables.map((v: string) => VARIABLE[v] ?? v).join(' · ')} color="emerald" />
