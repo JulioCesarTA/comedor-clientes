@@ -30,12 +30,15 @@ function getKey(header, cb) {
 }
 
 function requireAuth(req, res, next) {
-  if (process.env.AUTH_DISABLED === 'true') return next();
   const h = req.headers.authorization || '';
   const token = h.startsWith('Bearer ') ? h.slice(7) : null;
-  if (!token) return res.status(401).json({ error: 'no token' });
+  const sinAuth = process.env.AUTH_DISABLED === 'true';
+  // Sin token: con auth obligatoria se rechaza; con AUTH_DISABLED se deja pasar (llamadas internas sin token).
+  // Pero SI llega un token, se valida siempre: así req.user/roles quedan bien para quien de verdad inició sesión
+  // (si no, nunca se puede saber quién es un administrador, ni con AUTH_DISABLED).
+  if (!token) return sinAuth ? next() : res.status(401).json({ error: 'no token' });
   jwt.verify(token, getKey, { algorithms: ['RS256'] }, (err, decoded) => {
-    if (err) return res.status(401).json({ error: 'token inválido', detail: err.message });
+    if (err) return sinAuth ? next() : res.status(401).json({ error: 'token inválido', detail: err.message });
     req.user = decoded;
     next();
   });
@@ -167,11 +170,9 @@ const proxyAll = (patterns, target, onProxyReq) => createProxyMiddleware({
 
 /** Cabeceras con quién es y qué rol tiene, según el token verificado (el cliente no puede fijarlas). */
 const conUsuarioYRoles = (proxyReq, req) => {
-  console.log('[DEBUG conUsuarioYRoles]', req.method, req.originalUrl, 'user?', !!req.user, 'roles', req.user?.realm_access?.roles);
   if (!req.user) return;
   proxyReq.setHeader('x-roles', (req.user.realm_access?.roles || []).join(','));
   proxyReq.setHeader('x-usuario', req.user.preferred_username || '');
-  console.log('[DEBUG conUsuarioYRoles] header puesto:', proxyReq.getHeader('x-roles'));
 };
 
 // Núcleo del negocio del back-office (SPEC §4): /graphql va al gateway federado, con el mismo control de token.
