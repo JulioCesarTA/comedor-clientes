@@ -37,19 +37,31 @@ function Gauge({ valor, color }: { valor: number; color: string }) {
 }
 
 function GOcupacion({ k, color }: any) {
-  const g = k.grafico;
+  // Cada barra es el cupo del día: la parte de color es lo reservado, la gris lo que quedó libre.
+  const dias = k.grafico.porDia.map((d: any) => ({ ...d, libres: Math.max(0, d.cupo - d.reservadas),
+    pct: d.cupo ? Math.round(100 * d.reservadas / d.cupo) : null }));
   return (
     <div className="grid grid-cols-5 gap-2 h-full">
-      <div className="col-span-2"><Gauge valor={k.valor} color={color} /></div>
+      <div className="col-span-2 flex flex-col">
+        <div className="flex-1"><Gauge valor={k.valor} color={color} /></div>
+        <div className="text-[11px] text-slate-400 space-y-0.5">
+          {k.grafico.porTurno.map((t: any) => (
+            <div key={t.turno} className="flex justify-between gap-2"><span>{t.turno.charAt(0) + t.turno.slice(1).toLowerCase()}</span>
+              <span className="text-slate-300">{t.cupo ? Math.round(100 * t.reservadas / t.cupo) : 0}% <span className="text-slate-500">({t.reservadas}/{t.cupo})</span></span></div>
+          ))}
+        </div>
+      </div>
       <div className="col-span-3">
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={g.porDia} margin={{ top: 8, right: 4, left: -22, bottom: 0 }} barGap={-14}>
+          <BarChart data={dias} margin={{ top: 8, right: 4, left: -18, bottom: 0 }}>
             <CartesianGrid stroke={malla} vertical={false} />
             <XAxis dataKey="dia" tick={eje} interval={1} angle={-35} textAnchor="end" height={42} />
             <YAxis tick={eje} />
-            <Tooltip contentStyle={tip} cursor={{ fill: '#ffffff08' }} />
-            <Bar dataKey="cupo" name="Cupo ofrecido" fill="#334155" radius={[4, 4, 0, 0]} barSize={14} />
-            <Bar dataKey="reservadas" name="Reservadas" fill={color} radius={[4, 4, 0, 0]} barSize={14} />
+            <Tooltip contentStyle={tip} cursor={{ fill: '#ffffff08' }}
+              formatter={(v: any, n: any, p: any) => n === 'Reservadas' ? [`${v} de ${p.payload.cupo} (${p.payload.pct ?? 0}%)`, n] : [v, n]} />
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <Bar dataKey="reservadas" name="Reservadas" stackId="c" fill={color} />
+            <Bar dataKey="libres" name="Sin reservar" stackId="c" fill="#334155" radius={[4, 4, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>
       </div>
@@ -57,21 +69,39 @@ function GOcupacion({ k, color }: any) {
   );
 }
 
+const METODO: Record<string, string> = { qr_bancario: 'QR bancario', efectivo: 'Efectivo', beca: 'Beca' };
+const bs = (v: number) => `${Math.round(v).toLocaleString('es-BO')} Bs`;
+
 function GIngresos({ k }: any) {
   const g = k.grafico;
+  const total = g.porMetodo.reduce((s: number, m: any) => s + m.monto, 0);
   return (
-    <ResponsiveContainer width="100%" height="100%">
-      <ComposedChart data={g.porDia} margin={{ top: 8, right: 4, left: -18, bottom: 0 }}>
-        <CartesianGrid stroke={malla} vertical={false} />
-        <XAxis dataKey="dia" tick={eje} interval={1} angle={-35} textAnchor="end" height={42} />
-        <YAxis yAxisId="d" tick={eje} />
-        <YAxis yAxisId="a" orientation="right" tick={eje} />
-        <Tooltip contentStyle={tip} cursor={{ fill: '#ffffff08' }} />
-        <Legend wrapperStyle={{ fontSize: 11 }} />
-        <Bar yAxisId="d" dataKey="monto" name="Cobrado del día (Bs)" fill="#06b6d4" radius={[4, 4, 0, 0]} />
-        <Line yAxisId="a" dataKey="acumulado" name="Acumulado (Bs)" stroke="#a855f7" strokeWidth={2.5} dot={false} type="monotone" />
-      </ComposedChart>
-    </ResponsiveContainer>
+    <div className="h-full flex flex-col">
+      <div className="flex-1">
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={g.porDia} margin={{ top: 8, right: 4, left: -10, bottom: 0 }}>
+            <CartesianGrid stroke={malla} vertical={false} />
+            <XAxis dataKey="dia" tick={eje} interval={1} angle={-35} textAnchor="end" height={42} />
+            <YAxis yAxisId="d" tick={eje} tickFormatter={(v: any) => v >= 1000 ? `${Math.round(v / 1000)}k` : v} />
+            <YAxis yAxisId="a" orientation="right" tick={eje} tickFormatter={(v: any) => v >= 1000 ? `${Math.round(v / 1000)}k` : v} />
+            <Tooltip contentStyle={tip} cursor={{ fill: '#ffffff08' }} formatter={(v: any, n: any) => [bs(v), n]} />
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <Bar yAxisId="d" dataKey="monto" name="Cobrado del día" fill="#06b6d4" radius={[4, 4, 0, 0]} />
+            <Line yAxisId="a" dataKey="acumulado" name="Acumulado 14 días" stroke="#a855f7" strokeWidth={2.5} dot={false} type="monotone" />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+      {total > 0 && (
+        <div className="flex flex-wrap gap-1.5 mt-1 text-[11px]">
+          {g.porMetodo.map((m: any) => (
+            <span key={m.metodo} className="px-2 py-0.5 rounded border border-slate-700 bg-slate-800 text-slate-300">
+              {METODO[m.metodo] ?? m.metodo}: {Math.round(100 * m.monto / total)}%
+            </span>
+          ))}
+          <span className="text-slate-500 self-center">del total histórico cobrado</span>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -149,18 +179,20 @@ function GDesperdicio({ k }: any) {
 }
 
 function GInsumos({ k }: any) {
-  // Semáforo de vencimiento: cuanto más corta la barra, más urgente.
-  const datos = k.grafico.items.filter((i: any) => i.dias !== null).map((i: any) => ({ ...i, v: Math.max(0, Math.min(30, i.dias)) }));
+  // Semáforo de vencimiento: cuanto más corta la barra, más urgente. Un lote vencido se dibuja mínimo y en rojo.
+  const datos = k.grafico.items.filter((i: any) => i.dias !== null)
+    .map((i: any) => ({ ...i, v: i.dias < 0 ? 1 : Math.max(1, Math.min(30, i.dias)) }));
   const color = (d: number) => (d <= 3 ? '#ef4444' : d <= 7 ? '#f59e0b' : '#10b981');
+  const etiqueta = (d: number) => (d < 0 ? 'vencido' : d === 0 ? 'vence hoy' : d > 30 ? '+30 d' : `${d} d`);
   return (
     <ResponsiveContainer width="100%" height="100%">
-      <BarChart data={datos} layout="vertical" margin={{ top: 4, right: 24, left: 0, bottom: 0 }}>
+      <BarChart data={datos} layout="vertical" margin={{ top: 4, right: 56, left: 0, bottom: 0 }}>
         <CartesianGrid stroke={malla} horizontal={false} />
         <XAxis type="number" domain={[0, 30]} tick={eje} unit=" d" />
         <YAxis type="category" dataKey="insumo" tick={eje} width={92} />
         <Tooltip contentStyle={tip} cursor={{ fill: '#ffffff08' }}
-          formatter={(_: any, __: any, p: any) => [`vence en ${p.payload.dias} días · stock ${p.payload.stock} ${p.payload.unidad ?? ''}${p.payload.bajo ? ' (BAJO)' : ''}`, p.payload.insumo]} />
-        <Bar dataKey="v" radius={[0, 6, 6, 0]} label={{ position: 'right', fill: '#cbd5e1', fontSize: 11, formatter: (v: any) => `${v} d` }}>
+          formatter={(_: any, __: any, p: any) => [`${p.payload.dias < 0 ? `vencido hace ${-p.payload.dias} día(s)` : `vence en ${p.payload.dias} días`} · stock ${p.payload.stock} ${p.payload.unidad ?? ''}${p.payload.bajo ? ' (BAJO)' : ''}`, p.payload.insumo]} />
+        <Bar dataKey="v" radius={[0, 6, 6, 0]} label={{ position: 'right', fill: '#cbd5e1', fontSize: 11, formatter: (_: any, __: any, p: any) => etiqueta(p?.payload?.dias ?? p?.dias ?? 0) }}>
           {datos.map((i: any) => <Cell key={i.insumo} fill={i.bajo ? '#dc2626' : color(i.dias)} />)}
         </Bar>
       </BarChart>
