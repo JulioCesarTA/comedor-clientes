@@ -32,7 +32,7 @@ jobs:
           echo "DOCKER_CONFIG=$DC" >> "$GITHUB_ENV"
 
       - name: Login en ECR
-        run: aws ecr get-login-password | docker login --username AWS --password-stdin 483549541027.dkr.ecr.us-west-2.amazonaws.com
+        run: aws ecr get-login-password | docker login --username AWS --password-stdin 006419716393.dkr.ecr.us-west-2.amazonaws.com
 
       - name: Construir y subir las 6 imágenes (en paralelo)
         env:
@@ -40,7 +40,7 @@ jobs:
         run: |
           construir() {  # imagen contexto [build-args...]
             img=$1; ctx=$2; shift 2
-            docker build -t 483549541027.dkr.ecr.us-west-2.amazonaws.com/comedor/$img:latest "$@" $ctx && docker push 483549541027.dkr.ecr.us-west-2.amazonaws.com/comedor/$img:latest
+            docker build -t 006419716393.dkr.ecr.us-west-2.amazonaws.com/comedor/$img:latest "$@" $ctx && docker push 006419716393.dkr.ecr.us-west-2.amazonaws.com/comedor/$img:latest
           }
           construir api-gateway gateway/api-gateway &
           construir graphql-gateway gateway/graphql-gateway &
